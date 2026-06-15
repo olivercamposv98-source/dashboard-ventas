@@ -666,7 +666,7 @@ with t3:
     piv = (df.groupby(["Semana","Sucursal"])["V_Real"].sum().reset_index()
              .pivot(index="Sucursal",columns="Semana",values="V_Real").fillna(0))
     piv.columns = [f"Sem {c}" for c in piv.columns]
-    st.dataframe(piv.applymap(fmt), use_container_width=True)
+    st.dataframe(piv.map(fmt), use_container_width=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # TAB 4 — OPERACIONES
