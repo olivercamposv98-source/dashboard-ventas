@@ -1,8 +1,4 @@
 streamlit
-streamlit-gsheets-connection
-gspread
-google-auth
-google-auth-oauthlib
 pandas
 numpy
 plotly
