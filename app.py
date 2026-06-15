@@ -307,10 +307,11 @@ def barra(pct):
 # GRÁFICOS
 # ─────────────────────────────────────────────────────────────────────────────
 def _lay(fig, h=340, **kw):
+    kw.setdefault("margin", dict(l=20, r=30, t=30, b=20))
     fig.update_layout(
         template=PLOTLY_TMPL, height=h,
         plot_bgcolor=_TP, paper_bgcolor=_TP,
-        margin=dict(l=20,r=30,t=30,b=20), **kw)
+        **kw)
     return fig
 
 def chart_real_vs_proy(df):
