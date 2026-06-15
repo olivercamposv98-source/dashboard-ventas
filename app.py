@@ -114,20 +114,26 @@ st.markdown(f"""
           padding-bottom:.3rem; margin:1.1rem 0 .65rem; }}
 
   .alert-r {{
-    background:#FEF2F2; border:1px solid #FECACA;
+    background:#FEF2F2 !important; border:1px solid #FECACA;
     border-left:4px solid {C['red']}; padding:.65rem 1rem;
     border-radius:8px; margin:.3rem 0; font-size:.83rem;
+    color:#7F1D1D !important;
   }}
+  .alert-r strong {{ color:#991B1B !important; }}
   .alert-w {{
-    background:#FFFBEB; border:1px solid {C['yellow_lt']};
+    background:#FFFBEB !important; border:1px solid {C['yellow_lt']};
     border-left:4px solid {C['yellow']}; padding:.65rem 1rem;
     border-radius:8px; margin:.3rem 0; font-size:.83rem;
+    color:#78350F !important;
   }}
+  .alert-w strong {{ color:#92400E !important; }}
   .alert-g {{
-    background:{C['green_pale']}; border:1px solid #6EE7B7;
+    background:{C['green_pale']} !important; border:1px solid #6EE7B7;
     border-left:4px solid {C['green']}; padding:.65rem 1rem;
     border-radius:8px; margin:.3rem 0; font-size:.83rem;
+    color:#064E3B !important;
   }}
+  .alert-g strong {{ color:#065F46 !important; }}
 
   .stTabs [data-baseweb="tab-list"] {{
     gap:.4rem; background:{C['bg']}; padding:.32rem; border-radius:10px;
@@ -316,16 +322,21 @@ def _lay(fig, h=340, **kw):
 
 def chart_real_vs_proy(df):
     g = df.groupby("Sucursal").agg(Real=("V_Real","sum"),Proy=("V_Proyectada","sum")).reset_index().sort_values("Real")
+    g["Cump"] = (g["Real"]/g["Proy"].replace(0,np.nan)*100).round(1)
     fig = go.Figure()
+    # Barra proyectada — sin texto para evitar superposición
     fig.add_trace(go.Bar(x=g["Proy"],y=g["Sucursal"],orientation="h",name="Proyectada",
-                         marker_color=C["slate"],opacity=.55,
-                         text=[fmt(v) for v in g["Proy"]],textposition="outside"))
+                         marker_color=C["slate"],opacity=.35,
+                         hovertemplate="<b>%{y}</b><br>Proyectada: %{x:,.0f}<extra></extra>"))
+    # Barra real — texto con % cumplimiento al final
     fig.add_trace(go.Bar(x=g["Real"],y=g["Sucursal"],orientation="h",name="Real",
-                         marker_color=C["yellow"],opacity=.9,
-                         text=[fmt(v) for v in g["Real"]],textposition="outside"))
-    return _lay(fig,barmode="overlay",h=max(280,len(g)*52),
+                         marker_color=C["yellow"],opacity=.92,
+                         text=[f"{fmt(r)}  ({c:.0f}%)" for r,c in zip(g["Real"],g["Cump"])],
+                         textposition="outside",
+                         hovertemplate="<b>%{y}</b><br>Real: %{x:,.0f}<extra></extra>"))
+    return _lay(fig,barmode="overlay",h=max(300,len(g)*58),
                 legend=dict(orientation="h",y=1.1),
-                margin=dict(l=20,r=140,t=35,b=20))
+                margin=dict(l=20,r=200,t=35,b=20))
 
 def chart_cump(df):
     g = df.groupby("Sucursal").agg(Real=("V_Real","sum"),Proy=("V_Proyectada","sum")).reset_index()
@@ -415,6 +426,128 @@ def chart_gauge(value):
     ))
     fig.update_layout(height=230,margin=dict(l=30,r=30,t=40,b=10),paper_bgcolor=_TP)
     return fig
+
+def get_wow_data(df):
+    """
+    Retorna dict con datos de las 2 últimas semanas del período filtrado.
+    Semanas según ISO (lunes-domingo).
+    """
+    semanas = sorted(df["Semana"].unique())
+    if len(semanas) < 2:
+        return None
+    sem_act = semanas[-1]
+    sem_ant = semanas[-2]
+
+    g = (df[df["Semana"].isin([sem_ant, sem_act])]
+           .groupby(["Sucursal","Semana"])
+           .agg(Real=("V_Real","sum"), Proy=("V_Proyectada","sum"))
+           .reset_index())
+
+    pivot_r = g.pivot(index="Sucursal", columns="Semana", values="Real").fillna(0)
+    pivot_p = g.pivot(index="Sucursal", columns="Semana", values="Proy").fillna(0)
+
+    # Asegurar que ambas semanas existan como columnas
+    for s in [sem_ant, sem_act]:
+        if s not in pivot_r.columns: pivot_r[s] = 0
+        if s not in pivot_p.columns: pivot_p[s] = 0
+
+    tbl = pd.DataFrame({
+        "Sucursal":   pivot_r.index,
+        "Sem_Ant":    pivot_r[sem_ant].values,
+        "Sem_Act":    pivot_r[sem_act].values,
+        "Proy_Ant":   pivot_p[sem_ant].values,
+        "Proy_Act":   pivot_p[sem_act].values,
+    })
+    tbl["Cambio"]    = tbl["Sem_Act"] - tbl["Sem_Ant"]
+    tbl["Cambio_Pct"]= np.where(
+        tbl["Sem_Ant"] > 0,
+        (tbl["Cambio"] / tbl["Sem_Ant"] * 100), 0
+    ).round(1)
+    tbl["Cump_Ant"]  = np.where(tbl["Proy_Ant"]>0, tbl["Sem_Ant"]/tbl["Proy_Ant"]*100, 0).round(1)
+    tbl["Cump_Act"]  = np.where(tbl["Proy_Act"]>0, tbl["Sem_Act"]/tbl["Proy_Act"]*100, 0).round(1)
+    tbl["Delta_Cump"]= (tbl["Cump_Act"] - tbl["Cump_Ant"]).round(1)
+
+    return {
+        "tbl":     tbl.sort_values("Cambio_Pct", ascending=False).reset_index(drop=True),
+        "sem_act": sem_act,
+        "sem_ant": sem_ant,
+        "total_act": tbl["Sem_Act"].sum(),
+        "total_ant": tbl["Sem_Ant"].sum(),
+        "total_proy_act": tbl["Proy_Act"].sum(),
+        "total_proy_ant": tbl["Proy_Ant"].sum(),
+    }
+
+
+def chart_wow_barras(wow):
+    """Barras agrupadas: semana anterior vs actual por sucursal."""
+    t = wow["tbl"].sort_values("Sem_Act", ascending=True)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=t["Sem_Ant"], y=t["Sucursal"], orientation="h",
+        name=f"Sem {wow['sem_ant']} (Anterior)",
+        marker_color=C["slate"], opacity=.6,
+        hovertemplate="<b>%{y}</b><br>Anterior: Bs %{x:,.0f}<extra></extra>",
+    ))
+    fig.add_trace(go.Bar(
+        x=t["Sem_Act"], y=t["Sucursal"], orientation="h",
+        name=f"Sem {wow['sem_act']} (Actual)",
+        marker_color=C["yellow"], opacity=.92,
+        text=[f"Bs {v:,.0f}" for v in t["Sem_Act"]],
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>Actual: Bs %{x:,.0f}<extra></extra>",
+    ))
+    return _lay(fig, h=max(300, len(t)*58), barmode="group",
+                legend=dict(orientation="h", y=1.1),
+                margin=dict(l=20, r=160, t=35, b=20))
+
+
+def chart_wow_cambio(wow):
+    """Barras horizontales del % cambio semana vs semana."""
+    t = wow["tbl"].sort_values("Cambio_Pct", ascending=True)
+    colors = [C["green"] if v >= 0 else C["red"] for v in t["Cambio_Pct"]]
+    fig = go.Figure(go.Bar(
+        x=t["Cambio_Pct"], y=t["Sucursal"], orientation="h",
+        marker_color=colors,
+        text=[f"{'▲' if v>=0 else '▼'} {abs(v):.1f}%" for v in t["Cambio_Pct"]],
+        textposition="outside",
+        hovertemplate="<b>%{y}</b><br>Cambio: %{x:.1f}%<extra></extra>",
+    ))
+    fig.add_vline(x=0, line_color=C["slate_lt"], line_width=1.5)
+    return _lay(fig, h=max(280, len(t)*52), showlegend=False,
+                xaxis_title="% Cambio vs semana anterior",
+                margin=dict(l=20, r=100, t=20, b=20))
+
+
+def chart_wow_cump(wow):
+    """Líneas de cumplimiento semana anterior vs actual."""
+    t   = wow["tbl"].sort_values("Cump_Act", ascending=False)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=list(range(len(t))), y=t["Cump_Ant"],
+        mode="lines+markers", name=f"Sem {wow['sem_ant']} (Ant.)",
+        line=dict(color=C["slate_lt"], width=2, dash="dot"),
+        marker=dict(size=8),
+        hovertemplate="<b>%{text}</b><br>Ant.: %{y:.1f}%<extra></extra>",
+        text=t["Sucursal"].tolist(),
+    ))
+    fig.add_trace(go.Scatter(
+        x=list(range(len(t))), y=t["Cump_Act"],
+        mode="lines+markers", name=f"Sem {wow['sem_act']} (Act.)",
+        line=dict(color=C["yellow"], width=3),
+        marker=dict(size=10),
+        hovertemplate="<b>%{text}</b><br>Act.: %{y:.1f}%<extra></extra>",
+        text=t["Sucursal"].tolist(),
+    ))
+    fig.add_hline(y=100, line_dash="dash", line_color=C["green"], line_width=1.5)
+    fig.update_xaxes(
+        tickmode="array",
+        tickvals=list(range(len(t))),
+        ticktext=[s.replace("CF ","") for s in t["Sucursal"]],
+        tickangle=-20,
+    )
+    fig.update_yaxes(ticksuffix="%", range=[0, max(t["Cump_Ant"].max(), t["Cump_Act"].max())*1.15])
+    return _lay(fig, h=330, legend=dict(orientation="h", y=1.1))
+
 
 def chart_desviacion(df):
     g = df.groupby("Fecha").agg(Desv=("Desviacion","sum")).reset_index().sort_values("Fecha")
@@ -653,6 +786,95 @@ with t2:
 # TAB 3 — TENDENCIAS
 # ══════════════════════════════════════════════════════════════════════════════
 with t3:
+
+    # ── COMPARACIÓN SEMANA A SEMANA ──────────────────────────────────────────
+    wow = get_wow_data(df)
+
+    if wow is None:
+        st.info("ℹ️ Se necesitan al menos 2 semanas de datos para la comparación WoW.")
+    else:
+        cambio_total     = wow["total_act"] - wow["total_ant"]
+        cambio_total_pct = (cambio_total / wow["total_ant"] * 100) if wow["total_ant"] > 0 else 0
+        cump_act_tot     = (wow["total_act"] / wow["total_proy_act"] * 100) if wow["total_proy_act"] > 0 else 0
+        cump_ant_tot     = (wow["total_ant"] / wow["total_proy_ant"] * 100) if wow["total_proy_ant"] > 0 else 0
+        delta_cump       = cump_act_tot - cump_ant_tot
+
+        mejor_wow  = wow["tbl"].loc[wow["tbl"]["Cambio_Pct"].idxmax()]
+        peor_wow   = wow["tbl"].loc[wow["tbl"]["Cambio_Pct"].idxmin()]
+
+        sec(f"📅 Comparación Semana a Semana  ·  Sem {wow['sem_ant']} vs Sem {wow['sem_act']}")
+
+        c1,c2,c3,c4 = st.columns(4)
+        with c1:
+            kpi(f"📦 Sem {wow['sem_act']} (Actual)", fmt(wow["total_act"]),
+                badge=fmt_pct(cump_act_tot) + " cumpl.", bt="bp" if cump_act_tot>=100 else "bw")
+        with c2:
+            kpi(f"📦 Sem {wow['sem_ant']} (Anterior)", fmt(wow["total_ant"]),
+                badge=fmt_pct(cump_ant_tot) + " cumpl.", bt="bnu")
+        with c3:
+            kpi("📈 Cambio Semana", fmt(cambio_total),
+                badge=f"{'▲' if cambio_total_pct>=0 else '▼'} {abs(cambio_total_pct):.1f}%",
+                bt="bp" if cambio_total>=0 else "bn")
+        with c4:
+            kpi("🎯 Δ Cumplimiento", fmt_pct(delta_cump),
+                badge=f"{'▲' if delta_cump>=0 else '▼'} puntos porcentuales",
+                bt="bp" if delta_cump>=0 else "bn")
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Barras agrupadas + cambio %
+        col_bar, col_chg = st.columns([3, 2])
+        with col_bar:
+            st.plotly_chart(chart_wow_barras(wow), use_container_width=True)
+        with col_chg:
+            st.plotly_chart(chart_wow_cambio(wow), use_container_width=True)
+
+        # Líneas de cumplimiento
+        st.plotly_chart(chart_wow_cump(wow), use_container_width=True)
+
+        # Tabla detallada WoW
+        tbl_disp = wow["tbl"].copy()
+        tbl_disp["Tendencia"] = tbl_disp["Cambio_Pct"].apply(
+            lambda v: f"▲ {abs(v):.1f}%" if v >= 0 else f"▼ {abs(v):.1f}%"
+        )
+        tbl_disp["Δ Cumpl."] = tbl_disp["Delta_Cump"].apply(
+            lambda v: f"▲ {abs(v):.1f}pp" if v >= 0 else f"▼ {abs(v):.1f}pp"
+        )
+        for col in ["Sem_Ant","Sem_Act","Cambio"]:
+            tbl_disp[col] = tbl_disp[col].apply(fmt)
+        tbl_disp["Cump_Ant"] = tbl_disp["Cump_Ant"].apply(fmt_pct)
+        tbl_disp["Cump_Act"] = tbl_disp["Cump_Act"].apply(fmt_pct)
+
+        st.dataframe(
+            tbl_disp[["Sucursal","Sem_Ant","Cump_Ant","Sem_Act","Cump_Act","Cambio","Tendencia","Δ Cumpl."]].rename(columns={
+                "Sem_Ant": f"Sem {wow['sem_ant']}",
+                "Cump_Ant": f"Cumpl. {wow['sem_ant']}",
+                "Sem_Act": f"Sem {wow['sem_act']}",
+                "Cump_Act": f"Cumpl. {wow['sem_act']}",
+                "Cambio": "Δ Venta",
+            }),
+            use_container_width=True, hide_index=True
+        )
+
+        # Ganadores y perdedores
+        col_g, col_p = st.columns(2)
+        with col_g:
+            st.markdown(f"""
+            <div class="alert-g">
+              🏆 <strong>Mayor crecimiento:</strong> {mejor_wow['Sucursal']}
+              &nbsp;|&nbsp; ▲ {mejor_wow['Cambio_Pct']:.1f}%
+              &nbsp;|&nbsp; {fmt(mejor_wow['Sem_Ant'])} → {fmt(mejor_wow['Sem_Act'])}
+            </div>""", unsafe_allow_html=True)
+        with col_p:
+            st.markdown(f"""
+            <div class="alert-r">
+              ⚠️ <strong>Mayor caída:</strong> {peor_wow['Sucursal']}
+              &nbsp;|&nbsp; ▼ {abs(peor_wow['Cambio_Pct']):.1f}%
+              &nbsp;|&nbsp; {fmt(peor_wow['Sem_Ant'])} → {fmt(peor_wow['Sem_Act'])}
+            </div>""", unsafe_allow_html=True)
+
+    st.divider()
+
     sec("📈 Venta Real por Sucursal — Evolución Diaria")
     st.plotly_chart(chart_por_sucursal(df), use_container_width=True)
 
