@@ -182,7 +182,7 @@ def parse_pct(val) -> float:
 
 def get_grupo(suc: str) -> str:
     s = str(suc).strip().upper()
-    if s.startswith("CF "):    return "Cafeterías CF"
+    if s.startswith("CF "):    return "Chico Fresa"
     if "HAPPY"        in s:    return "La Happy Hour"
     if "SANTO DOMINGO" in s:   return "Santo Domingo Urubo"
     return "Otras"
