@@ -1,178 +1,139 @@
-# =============================================================================
-#  DASHBOARD DE VENTAS — BD_VENTAS_DIARIAS
-#  Conexión: Google Sheets público vía CSV (sin paquetes externos)
-#  Columnas: FECHA | SUCURSAL | VENTA PROYECTADA | VENTA REAL | DESVIACIÓN | % CUMPLIMIENTO
-# =============================================================================
+"""
+Dashboard de Ventas Diarias — Dark BI Edition
+==============================================
+Fuente: Google Sheets  BD_VENTAS_DIARIAS
+Moneda: Bolivianos (Bs)
+"""
 
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from datetime import datetime, date, timedelta
-import calendar
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURACIÓN DE PÁGINA
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  CONFIG DE PÁGINA
+# ─────────────────────────────────────────────
 st.set_page_config(
-    page_title="Dashboard de Ventas",
-    page_icon="📊",
+    page_title="Sales Intelligence · BD_VENTAS",
+    page_icon="⚡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ⚙️  CONFIGURACIÓN — solo cambia estas 2 líneas si es necesario
-# ─────────────────────────────────────────────────────────────────────────────
-SHEET_ID    = "1kbG1uvxDx5qF6g-ucGgqsTHRqV9IfRHM5J2nj-kQyjA"
-SHEET_NAME  = "BD_VENTAS_DIARIAS"   # nombre exacto de la pestaña
+# ─────────────────────────────────────────────
+#  PALETA DARK BI
+# ─────────────────────────────────────────────
+BG       = "#0A0E1A"
+BG2      = "#111827"
+BG3      = "#1C2537"
+BG4      = "#243044"
+CYAN     = "#00F5D4"
+CYAN_D   = "rgba(0,245,212,0.12)"
+BLUE     = "#4CC9F0"
+BLUE_D   = "rgba(76,201,240,0.12)"
+RED      = "#FF4757"
+RED_D    = "rgba(255,71,87,0.15)"
+YELLOW   = "#FFB800"
+YELLOW_D = "rgba(255,184,0,0.15)"
+GREEN    = "#06D6A0"
+GREEN_D  = "rgba(6,214,160,0.15)"
+TEXT     = "#E2E8F0"
+TEXT_DIM = "#8892B0"
+BORDER   = "#1E3A4A"
 
-# URL pública de exportación CSV (funciona si el Sheet es "Cualquiera con el enlace")
-CSV_URL = (
+# ─────────────────────────────────────────────
+#  GOOGLE SHEETS
+# ─────────────────────────────────────────────
+SHEET_ID   = "1kbG1uvxDx5qF6g-ucGgqsTHRqV9IfRHM5J2nj-kQyjA"
+SHEET_NAME = "BD_VENTAS_DIARIAS"
+CSV_URL    = (
     f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
     f"/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
 )
+SYM          = "Bs"
+UMBRAL_CRIT  = 70.0
+UMBRAL_ALERT = 90.0
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PALETA CORPORATIVA
-# ─────────────────────────────────────────────────────────────────────────────
-C = {
-    "yellow":      "#F59E0B",
-    "yellow_lt":   "#FDE68A",
-    "yellow_pale": "rgba(245,158,11,0.12)",
-    "slate_dark":  "#1F2937",
-    "slate":       "#374151",
-    "slate_lt":    "#6B7280",
-    "green":       "#10B981",
-    "green_pale":  "#D1FAE5",
-    "red":         "#EF4444",
-    "red_pale":    "#FEE2E2",
-    "blue":        "#3B82F6",
-    "purple":      "#8B5CF6",
-    "orange":      "#F97316",
-    "bg":          "#F8FAFC",
-    "white":       "#FFFFFF",
-    "border":      "#E5E7EB",
-}
-
+# ─────────────────────────────────────────────
+#  CSS GLOBAL
+# ─────────────────────────────────────────────
 st.markdown(f"""
 <style>
-  .main .block-container {{ padding-top:.9rem; padding-bottom:2rem; }}
+[data-testid="stAppViewContainer"],
+[data-testid="stApp"] {{
+    background:{BG} !important;
+    color:{TEXT} !important;
+}}
+[data-testid="stSidebar"] {{
+    background:{BG2} !important;
+    border-right:1px solid {BORDER} !important;
+}}
+[data-testid="stSidebar"] * {{ color:{TEXT} !important; }}
+h1,h2,h3,h4 {{ color:{TEXT} !important; }}
+.block-container {{ padding-top:1rem !important; }}
 
-  .dash-header {{
-    background:linear-gradient(135deg,{C['slate_dark']} 0%,{C['slate']} 100%);
-    padding:1.3rem 2rem; border-radius:14px;
-    border-left:7px solid {C['yellow']}; margin-bottom:1.3rem;
-  }}
-  .dash-header h1 {{ color:{C['yellow']}; font-size:1.7rem; font-weight:800; margin:0; }}
-  .dash-header p  {{ color:#D1D5DB; margin:.2rem 0 0; font-size:.82rem; }}
-
-  .kpi {{
-    background:{C['white']}; padding:1rem 1.2rem;
-    border-radius:12px; border:1px solid {C['border']};
-    border-top:4px solid {C['yellow']};
-    box-shadow:0 1px 4px rgba(0,0,0,.07);
-    text-align:center; height:100%;
-  }}
-  .kpi-dark {{
-    background:linear-gradient(135deg,{C['slate_dark']},{C['slate']});
-    padding:1.3rem 1.5rem; border-radius:14px;
-    border-left:6px solid {C['yellow']};
-    box-shadow:0 4px 14px rgba(0,0,0,.18); text-align:center;
-  }}
-  .kpi-green {{
-    background:linear-gradient(135deg,#064E3B,#065F46);
-    padding:1rem 1.2rem; border-radius:12px;
-    border-left:5px solid {C['green']};
-    box-shadow:0 2px 8px rgba(0,0,0,.12); text-align:center;
-  }}
-  .kpi-red {{
-    background:linear-gradient(135deg,#7F1D1D,#991B1B);
-    padding:1rem 1.2rem; border-radius:12px;
-    border-left:5px solid {C['red']};
-    box-shadow:0 2px 8px rgba(0,0,0,.12); text-align:center;
-  }}
-  .kpi-title  {{ font-size:.68rem; font-weight:700; text-transform:uppercase;
-                 letter-spacing:.06em; color:{C['slate_lt']}; margin-bottom:.35rem; }}
-  .kpi-dark .kpi-title, .kpi-green .kpi-title, .kpi-red .kpi-title
-                {{ color:rgba(255,255,255,.65); }}
-  .kpi-value  {{ font-size:1.65rem; font-weight:800; color:{C['slate_dark']}; line-height:1.15; }}
-  .kpi-dark .kpi-value  {{ color:{C['yellow']}; font-size:2rem; }}
-  .kpi-green .kpi-value {{ color:{C['green']}; font-size:1.65rem; }}
-  .kpi-red .kpi-value   {{ color:#FCA5A5; font-size:1.65rem; }}
-  .badge {{ display:inline-block; font-size:.7rem; font-weight:600;
-            padding:.16rem .55rem; border-radius:20px; margin-top:.3rem; }}
-  .bp  {{ background:{C['green_pale']}; color:#065F46; }}
-  .bn  {{ background:{C['red_pale']};   color:#991B1B; }}
-  .bnu {{ background:#F3F4F6;           color:{C['slate']}; }}
-  .bw  {{ background:#FEF3C7;           color:#92400E; }}
-
-  .sec {{ font-size:.92rem; font-weight:700; color:{C['slate_dark']};
-          border-bottom:2px solid {C['yellow']};
-          padding-bottom:.3rem; margin:1.1rem 0 .65rem; }}
-
-  .alert-r {{
-    background:#FEF2F2 !important; border:1px solid #FECACA;
-    border-left:4px solid {C['red']}; padding:.65rem 1rem;
-    border-radius:8px; margin:.3rem 0; font-size:.83rem;
-    color:#7F1D1D !important;
-  }}
-  .alert-r strong {{ color:#991B1B !important; }}
-  .alert-w {{
-    background:#FFFBEB !important; border:1px solid {C['yellow_lt']};
-    border-left:4px solid {C['yellow']}; padding:.65rem 1rem;
-    border-radius:8px; margin:.3rem 0; font-size:.83rem;
-    color:#78350F !important;
-  }}
-  .alert-w strong {{ color:#92400E !important; }}
-  .alert-g {{
-    background:{C['green_pale']} !important; border:1px solid #6EE7B7;
-    border-left:4px solid {C['green']}; padding:.65rem 1rem;
-    border-radius:8px; margin:.3rem 0; font-size:.83rem;
-    color:#064E3B !important;
-  }}
-  .alert-g strong {{ color:#065F46 !important; }}
-
-  .stTabs [data-baseweb="tab-list"] {{
-    gap:.4rem; background:{C['bg']}; padding:.32rem; border-radius:10px;
-  }}
-  .stTabs [data-baseweb="tab"] {{
-    border-radius:8px; padding:.42rem .85rem; font-weight:600; font-size:.8rem;
-  }}
-  .stTabs [aria-selected="true"] {{
-    background:{C['yellow']} !important; color:{C['slate_dark']} !important;
-  }}
-
-  .prog-wrap {{ background:#E5E7EB; border-radius:8px; height:10px; margin:.25rem 0; }}
-  .prog-bar  {{ height:10px; border-radius:8px; }}
-
-  .footer {{
-    text-align:center; color:{C['slate_lt']}; font-size:.7rem;
-    padding:.85rem; border-top:1px solid {C['border']}; margin-top:1.8rem;
-  }}
+.kpi-card {{
+    background:{BG3};
+    border:1px solid {BORDER};
+    border-radius:12px;
+    padding:18px 20px;
+    text-align:center;
+    position:relative;
+    overflow:hidden;
+}}
+.kpi-card::before {{
+    content:"";
+    position:absolute;
+    top:0; left:0; right:0;
+    height:3px;
+    background:var(--accent);
+}}
+.kpi-label {{
+    font-size:10px;
+    letter-spacing:1.5px;
+    text-transform:uppercase;
+    color:{TEXT_DIM};
+    margin-bottom:8px;
+}}
+.kpi-value {{
+    font-size:26px;
+    font-weight:800;
+    color:var(--accent);
+    line-height:1.1;
+    margin-bottom:4px;
+    word-break:break-word;
+}}
+.kpi-sub {{
+    font-size:11px;
+    color:{TEXT_DIM};
+}}
+.sec-title {{
+    font-size:11px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+    color:{CYAN};
+    font-weight:600;
+    margin-bottom:12px;
+    padding-bottom:6px;
+    border-bottom:1px solid {BG4};
+}}
+.alert-r {{background:{RED_D};border-left:3px solid {RED};border-radius:6px;padding:8px 12px;margin:4px 0;color:{TEXT} !important;}}
+.alert-w {{background:{YELLOW_D};border-left:3px solid {YELLOW};border-radius:6px;padding:8px 12px;margin:4px 0;color:{TEXT} !important;}}
+.alert-g {{background:{GREEN_D};border-left:3px solid {GREEN};border-radius:6px;padding:8px 12px;margin:4px 0;color:{TEXT} !important;}}
+.alert-r strong,.alert-w strong,.alert-g strong {{ color:{TEXT} !important; }}
+.dark-div {{ border:none;border-top:1px solid {BG4};margin:18px 0; }}
 </style>
 """, unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONSTANTES
-# ─────────────────────────────────────────────────────────────────────────────
-SYM           = "Bs"
-UMBRAL_CRIT   = 70.0
-UMBRAL_ALERT  = 90.0
-_TP           = "rgba(0,0,0,0)"
-PLOTLY_TMPL   = "plotly_white"
-
-# ─────────────────────────────────────────────────────────────────────────────
-# PARSERS
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+#  PARSERS
+# ─────────────────────────────────────────────
 def parse_bs(val) -> float:
     if pd.isna(val) or str(val).strip() in ("", "-", "—"):
         return np.nan
-    s   = str(val).strip()
+    s = str(val).strip()
     neg = s.startswith("-")
-    s   = s.replace("-", "").replace("Bs", "").replace(",", "").replace(" ", "")
+    s = s.replace("-", "").replace("Bs", "").replace(",", "").replace(" ", "")
     try:
         return -float(s) if neg else float(s)
     except ValueError:
@@ -188,851 +149,642 @@ def parse_pct(val) -> float:
 
 def get_grupo(suc: str) -> str:
     s = str(suc).strip().upper()
-    if s.startswith("CF "):    return "Chico Fresa"
-    if "HAPPY"        in s:    return "La Happy Hour"
-    if "SANTO DOMINGO" in s:   return "Santo Domingo Urubo"
+    if s.startswith("CF "):      return "Chico Fresa"
+    if "HAPPY"         in s:     return "La Happy Hour"
+    if "SANTO DOMINGO" in s:     return "Santo Domingo Urubo"
     return "Otras"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CARGA DE DATOS — pd.read_csv directo desde Google Sheets público
-# ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=60, show_spinner="⏳ Actualizando datos desde Google Sheets…")
+# ─────────────────────────────────────────────
+#  CARGA DE DATOS
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=60)
 def load_data() -> pd.DataFrame:
-    try:
-        df = pd.read_csv(CSV_URL)
-        df = df.dropna(how="all")
-        df.columns = df.columns.str.strip()
+    df = pd.read_csv(CSV_URL, header=0)
+    df.columns = [c.strip().upper() for c in df.columns]
+    col_map = {}
+    for c in df.columns:
+        cu = c.upper()
+        if "FECHA"       in cu:               col_map[c] = "FECHA"
+        elif "SUCURSAL"  in cu:               col_map[c] = "SUCURSAL"
+        elif "PROYECTADA" in cu:              col_map[c] = "PROYECTADA"
+        elif "REAL"      in cu:               col_map[c] = "REAL"
+        elif "DESVIACI"  in cu:               col_map[c] = "DESVIACION"
+        elif "CUMPL"     in cu or "%" in cu:  col_map[c] = "CUMPLIMIENTO"
+    df = df.rename(columns=col_map)
+    for col in ["PROYECTADA", "REAL", "DESVIACION"]:
+        if col in df.columns:
+            df[col] = df[col].apply(parse_bs)
+    if "CUMPLIMIENTO" in df.columns:
+        df["CUMPLIMIENTO"] = df["CUMPLIMIENTO"].apply(parse_pct)
+    if "FECHA" in df.columns:
+        df["FECHA"] = pd.to_datetime(df["FECHA"], dayfirst=True, errors="coerce")
+    df = df.dropna(subset=["FECHA", "REAL"])
+    df = df.sort_values("FECHA")
+    if "SUCURSAL" in df.columns:
+        df["GRUPO"] = df["SUCURSAL"].apply(get_grupo)
+    if "CUMPLIMIENTO" not in df.columns or df["CUMPLIMIENTO"].isna().all():
+        df["CUMPLIMIENTO"] = np.where(
+            df["PROYECTADA"].notna() & (df["PROYECTADA"] != 0),
+            df["REAL"] / df["PROYECTADA"] * 100,
+            np.nan
+        )
+    DIAS = {0:"Lunes",1:"Martes",2:"Miércoles",3:"Jueves",
+            4:"Viernes",5:"Sábado",6:"Domingo"}
+    df["DIA_SEMANA"] = df["FECHA"].dt.dayofweek.map(DIAS)
+    df["DIA_NUM"]    = df["FECHA"].dt.dayofweek
+    df["SEMANA_ISO"] = df["FECHA"].dt.isocalendar().week.astype(int)
+    df["MES"]        = df["FECHA"].dt.to_period("M").astype(str)
+    return df
 
-        rename = {
-            "FECHA":            "Fecha",
-            "SUCURSAL":         "Sucursal",
-            "VENTA PROYECTADA": "V_Proyectada",
-            "VENTA REAL":       "V_Real",
-            "DESVIACIÓN":       "Desviacion",
-            "% CUMPLIMIENTO":   "Pct_Cump",
-        }
-        df = df.rename(columns={k: v for k, v in rename.items() if k in df.columns})
+# ─────────────────────────────────────────────
+#  HELPERS
+# ─────────────────────────────────────────────
+DARK_BASE = dict(
+    template="plotly_dark",
+    plot_bgcolor="rgba(0,0,0,0)",
+    paper_bgcolor="rgba(0,0,0,0)",
+    font=dict(family="Inter,sans-serif", color=TEXT, size=12),
+    hoverlabel=dict(bgcolor=BG3, font_color=TEXT, bordercolor=BORDER),
+    legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT_DIM, size=10),
+                orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+)
 
-        df["Fecha"]        = pd.to_datetime(df["Fecha"], dayfirst=True, errors="coerce")
-        df["V_Proyectada"] = df["V_Proyectada"].apply(parse_bs)
-        df["V_Real"]       = df["V_Real"].apply(parse_bs)
-        df["Desviacion"]   = df["Desviacion"].apply(parse_bs)
-        df["Pct_Cump"]     = df["Pct_Cump"].apply(parse_pct)
+def dark_layout(**kw):
+    """Returns a layout dict merged with DARK_BASE, without duplicates."""
+    base = dict(DARK_BASE)
+    base.update(kw)
+    return base
 
-        mask = df["Pct_Cump"].isna() & df["V_Proyectada"].notna() & (df["V_Proyectada"] != 0)
-        df.loc[mask, "Pct_Cump"] = df.loc[mask, "V_Real"] / df.loc[mask, "V_Proyectada"] * 100
-
-        df["Grupo"]     = df["Sucursal"].apply(get_grupo)
-        df["Mes"]       = df["Fecha"].dt.to_period("M").astype(str)
-        df["Dia_Sem"]   = df["Fecha"].dt.day_name()
-        df["Semana"]    = df["Fecha"].dt.isocalendar().week.astype(int)
-        df["Sobre_Meta"]= df["Pct_Cump"] >= 100
-
-        return df.dropna(subset=["Fecha"])
-
-    except Exception as e:
-        st.error(f"⚠️ Error al leer Google Sheets: {e}")
-        return pd.DataFrame()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# RUN RATE
-# ─────────────────────────────────────────────────────────────────────────────
-def calcular_run_rate(df_mes: pd.DataFrame, df_full: pd.DataFrame) -> dict:
-    hoy   = date.today()
-    d_cur = hoy.day
-    d_mes = calendar.monthrange(hoy.year, hoy.month)[1]
-
-    venta_acum    = df_mes["V_Real"].sum() if not df_mes.empty else 0
-    proy_total    = df_mes["V_Proyectada"].sum() if not df_mes.empty else 0
-    run_rate      = (venta_acum / d_cur * d_mes) if d_cur > 0 else 0
-
-    primer = hoy.replace(day=1)
-    ant    = primer - timedelta(days=1)
-    mask_ant = (df_full["Fecha"].dt.year == ant.year) & (df_full["Fecha"].dt.month == ant.month)
-    venta_ant = df_full[mask_ant]["V_Real"].sum()
-
-    rr_suc = (
-        df_mes.groupby("Sucursal")["V_Real"].sum()
-        .reset_index().rename(columns={"V_Real": "Acumulado"})
-    ) if not df_mes.empty else pd.DataFrame(columns=["Sucursal","Acumulado"])
-    rr_suc["Run_Rate"] = (rr_suc["Acumulado"] / d_cur * d_mes)
-
-    proy_suc = (
-        df_mes.groupby("Sucursal")["V_Proyectada"].sum()
-        .reset_index().rename(columns={"V_Proyectada":"Proy_Total"})
-    ) if not df_mes.empty else pd.DataFrame(columns=["Sucursal","Proy_Total"])
-    rr_suc = rr_suc.merge(proy_suc, on="Sucursal", how="left")
-    rr_suc["Delta"] = rr_suc["Run_Rate"] - rr_suc["Proy_Total"]
-
-    return {
-        "run_rate":    run_rate,
-        "venta_acum":  venta_acum,
-        "proy_total":  proy_total,
-        "venta_ant":   venta_ant,
-        "d_cur":       d_cur,
-        "d_mes":       d_mes,
-        "rr_suc":      rr_suc.sort_values("Run_Rate", ascending=False),
-        "mes_label":   hoy.strftime("%B %Y").title(),
-    }
-
-# ─────────────────────────────────────────────────────────────────────────────
-# HELPERS UI
-# ─────────────────────────────────────────────────────────────────────────────
-def fmt(v):
-    if pd.isna(v): return f"{SYM} 0"
-    return f"{SYM} {v:,.0f}"
+def fmt_bs(v, d=0):
+    if pd.isna(v): return "—"
+    return f"Bs {int(v):,}" if d == 0 else f"Bs {v:,.{d}f}"
 
 def fmt_pct(v):
     if pd.isna(v): return "—"
     return f"{v:.1f}%"
 
-def kpi(title, value, badge="", bt="bnu", variant=""):
-    cls = f"kpi{'-'+variant if variant else ''}"
-    bh  = f'<span class="badge {bt}">{badge}</span>' if badge else ""
-    st.markdown(f"""
-    <div class="{cls}">
-      <div class="kpi-title">{title}</div>
-      <div class="kpi-value">{value}</div>
-      {bh}
+def pct_color(v):
+    if pd.isna(v):         return TEXT_DIM
+    if v < UMBRAL_CRIT:    return RED
+    if v < UMBRAL_ALERT:   return YELLOW
+    return GREEN
+
+def kpi(label, value, sub="", accent=CYAN):
+    st.markdown(f"""<div class="kpi-card" style="--accent:{accent};">
+        <div class="kpi-label">{label}</div>
+        <div class="kpi-value">{value}</div>
+        <div class="kpi-sub">{sub}</div>
     </div>""", unsafe_allow_html=True)
 
-def sec(label):
-    st.markdown(f'<div class="sec">{label}</div>', unsafe_allow_html=True)
+def sec(icon, text):
+    st.markdown(f'<div class="sec-title">{icon}&nbsp;&nbsp;{text}</div>', unsafe_allow_html=True)
 
-def barra(pct):
-    pct   = min(max(pct or 0, 0), 100)
-    color = (C["red"] if pct < UMBRAL_CRIT else
-             C["yellow"] if pct < UMBRAL_ALERT else C["green"])
-    return (
-        f'<div style="font-size:.75rem;color:{C["slate_lt"]}">{pct:.1f}%</div>'
-        f'<div class="prog-wrap"><div class="prog-bar" '
-        f'style="width:{pct:.1f}%;background:{color}"></div></div>'
-    )
+def divider():
+    st.markdown('<div class="dark-div"></div>', unsafe_allow_html=True)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# GRÁFICOS
-# ─────────────────────────────────────────────────────────────────────────────
-def _lay(fig, h=340, **kw):
-    kw.setdefault("margin", dict(l=20, r=30, t=30, b=20))
-    fig.update_layout(
-        template=PLOTLY_TMPL, height=h,
-        plot_bgcolor=_TP, paper_bgcolor=_TP,
-        **kw)
-    return fig
-
-def chart_real_vs_proy(df):
-    g = df.groupby("Sucursal").agg(Real=("V_Real","sum"),Proy=("V_Proyectada","sum")).reset_index().sort_values("Real")
-    g["Cump"] = (g["Real"]/g["Proy"].replace(0,np.nan)*100).round(1)
-    fig = go.Figure()
-    # Barra proyectada — sin texto para evitar superposición
-    fig.add_trace(go.Bar(x=g["Proy"],y=g["Sucursal"],orientation="h",name="Proyectada",
-                         marker_color=C["slate"],opacity=.35,
-                         hovertemplate="<b>%{y}</b><br>Proyectada: %{x:,.0f}<extra></extra>"))
-    # Barra real — texto con % cumplimiento al final
-    fig.add_trace(go.Bar(x=g["Real"],y=g["Sucursal"],orientation="h",name="Real",
-                         marker_color=C["yellow"],opacity=.92,
-                         text=[f"{fmt(r)}  ({c:.0f}%)" for r,c in zip(g["Real"],g["Cump"])],
-                         textposition="outside",
-                         hovertemplate="<b>%{y}</b><br>Real: %{x:,.0f}<extra></extra>"))
-    return _lay(fig,barmode="overlay",h=max(300,len(g)*58),
-                legend=dict(orientation="h",y=1.1),
-                margin=dict(l=20,r=200,t=35,b=20))
-
-def chart_cump(df):
-    g = df.groupby("Sucursal").agg(Real=("V_Real","sum"),Proy=("V_Proyectada","sum")).reset_index()
-    g["Cump"] = (g["Real"]/g["Proy"].replace(0,np.nan)*100).round(1)
-    g = g.sort_values("Cump")
-    colors = [C["red"] if c<UMBRAL_CRIT else C["yellow"] if c<UMBRAL_ALERT else C["green"]
-              for c in g["Cump"]]
-    fig = go.Figure(go.Bar(x=g["Cump"],y=g["Sucursal"],orientation="h",
-                           marker_color=colors,
-                           text=[f"{c:.1f}%" for c in g["Cump"]],textposition="outside"))
-    fig.add_vline(x=100,line_dash="dash",line_color=C["slate_lt"],line_width=2)
-    return _lay(fig,h=max(280,len(g)*52),showlegend=False,
-                xaxis_title="% Cumplimiento",margin=dict(l=20,r=80,t=20,b=30))
-
-def chart_tendencia(df):
-    g = df.groupby("Fecha").agg(Real=("V_Real","sum"),Proy=("V_Proyectada","sum")).reset_index().sort_values("Fecha")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=g["Fecha"],y=g["Proy"],name="Proyectada",
-                             line=dict(color=C["slate_lt"],width=2,dash="dot"),
-                             fill="tozeroy",fillcolor="rgba(107,114,128,.07)"))
-    fig.add_trace(go.Scatter(x=g["Fecha"],y=g["Real"],name="Real",
-                             line=dict(color=C["yellow"],width=3),
-                             fill="tozeroy",fillcolor=C["yellow_pale"]))
-    return _lay(fig,h=310,legend=dict(orientation="h",y=1.12))
-
-def chart_por_sucursal(df):
-    g = df.groupby(["Fecha","Sucursal"])["V_Real"].sum().reset_index()
-    fig = px.line(g,x="Fecha",y="V_Real",color="Sucursal",
-                  labels={"V_Real":f"Venta Real ({SYM})","Fecha":""},
-                  color_discrete_sequence=[C["yellow"],C["green"],C["blue"],C["purple"],
-                                           C["orange"],"#EC4899","#14B8A6","#F43F5E","#A78BFA"])
-    fig.update_traces(mode="lines+markers",marker=dict(size=5))
-    return _lay(fig,h=360,legend=dict(orientation="h",y=1.12))
-
-def chart_heatmap(df):
-    orden = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-    es    = {"Monday":"Lun","Tuesday":"Mar","Wednesday":"Mié",
-             "Thursday":"Jue","Friday":"Vie","Saturday":"Sáb","Sunday":"Dom"}
-    g = df.groupby(["Sucursal","Dia_Sem"])["Pct_Cump"].mean().reset_index()
-    g["Dia"] = g["Dia_Sem"].map(es)
-    dias_disp = [es[d] for d in orden if d in g["Dia_Sem"].unique()]
-    pivot = (g.pivot(index="Sucursal",columns="Dia",values="Pct_Cump")
-              .reindex(columns=dias_disp).fillna(0))
-    fig = go.Figure(go.Heatmap(
-        z=pivot.values, x=pivot.columns.tolist(), y=pivot.index.tolist(),
-        colorscale=[[0,"#FEE2E2"],[0.5,"#FEF3C7"],[1,"#D1FAE5"]],
-        zmin=0, zmax=150,
-        text=np.round(pivot.values,1), texttemplate="%{text}%",
-    ))
-    return _lay(fig,h=max(280,len(pivot)*44),margin=dict(l=20,r=20,t=20,b=20))
-
-def chart_dia_semana(df):
-    orden = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-    es    = {"Monday":"Lun","Tuesday":"Mar","Wednesday":"Mié",
-             "Thursday":"Jue","Friday":"Vie","Saturday":"Sáb","Sunday":"Dom"}
-    g = (df.groupby("Dia_Sem").agg(Real=("V_Real","sum"),Cump=("Pct_Cump","mean"))
-           .reindex(orden).reset_index().fillna(0))
-    g["Dia"] = g["Dia_Sem"].map(es)
-    colors = [C["red"] if c<UMBRAL_CRIT else C["yellow"] if c<UMBRAL_ALERT else C["green"]
-              for c in g["Cump"]]
-    fig = make_subplots(specs=[[{"secondary_y":True}]])
-    fig.add_trace(go.Bar(x=g["Dia"],y=g["Real"],name="Venta Real",
-                         marker_color=colors,opacity=.85), secondary_y=False)
-    fig.add_trace(go.Scatter(x=g["Dia"],y=g["Cump"],name="Cumpl. %",
-                             mode="lines+markers",
-                             line=dict(color=C["slate_dark"],width=2.5),
-                             marker=dict(size=9)), secondary_y=True)
-    fig.update_yaxes(secondary_y=True,range=[0,160],ticksuffix="%")
-    fig.add_hline(y=100,secondary_y=True,line_dash="dash",
-                  line_color=C["slate_lt"],line_width=1.5)
-    return _lay(fig,h=340,legend=dict(orientation="h",y=1.12))
-
-def chart_gauge(value):
-    fig = go.Figure(go.Indicator(
-        mode="gauge+number+delta", value=min(value,150),
-        title={"text":"Cumplimiento Global","font":{"size":13}},
-        delta={"reference":100,"suffix":"%"},
-        number={"suffix":"%","font":{"size":28}},
-        gauge={
-            "axis":{"range":[0,150],"ticksuffix":"%"},
-            "bar":{"color":C["yellow"]},
-            "steps":[{"range":[0,UMBRAL_CRIT],"color":"#FEE2E2"},
-                     {"range":[UMBRAL_CRIT,100],"color":"#FEF3C7"},
-                     {"range":[100,150],"color":"#D1FAE5"}],
-            "threshold":{"line":{"color":C["green"],"width":4},"thickness":.75,"value":100},
-        }
-    ))
-    fig.update_layout(height=230,margin=dict(l=30,r=30,t=40,b=10),paper_bgcolor=_TP)
-    return fig
-
-def get_wow_data(df):
-    """
-    Retorna dict con datos de las 2 últimas semanas del período filtrado.
-    Semanas según ISO (lunes-domingo).
-    """
-    semanas = sorted(df["Semana"].unique())
-    if len(semanas) < 2:
-        return None
-    sem_act = semanas[-1]
-    sem_ant = semanas[-2]
-
-    g = (df[df["Semana"].isin([sem_ant, sem_act])]
-           .groupby(["Sucursal","Semana"])
-           .agg(Real=("V_Real","sum"), Proy=("V_Proyectada","sum"))
-           .reset_index())
-
-    pivot_r = g.pivot(index="Sucursal", columns="Semana", values="Real").fillna(0)
-    pivot_p = g.pivot(index="Sucursal", columns="Semana", values="Proy").fillna(0)
-
-    # Asegurar que ambas semanas existan como columnas
-    for s in [sem_ant, sem_act]:
-        if s not in pivot_r.columns: pivot_r[s] = 0
-        if s not in pivot_p.columns: pivot_p[s] = 0
-
-    tbl = pd.DataFrame({
-        "Sucursal":   pivot_r.index,
-        "Sem_Ant":    pivot_r[sem_ant].values,
-        "Sem_Act":    pivot_r[sem_act].values,
-        "Proy_Ant":   pivot_p[sem_ant].values,
-        "Proy_Act":   pivot_p[sem_act].values,
-    })
-    tbl["Cambio"]    = tbl["Sem_Act"] - tbl["Sem_Ant"]
-    tbl["Cambio_Pct"]= np.where(
-        tbl["Sem_Ant"] > 0,
-        (tbl["Cambio"] / tbl["Sem_Ant"] * 100), 0
-    ).round(1)
-    tbl["Cump_Ant"]  = np.where(tbl["Proy_Ant"]>0, tbl["Sem_Ant"]/tbl["Proy_Ant"]*100, 0).round(1)
-    tbl["Cump_Act"]  = np.where(tbl["Proy_Act"]>0, tbl["Sem_Act"]/tbl["Proy_Act"]*100, 0).round(1)
-    tbl["Delta_Cump"]= (tbl["Cump_Act"] - tbl["Cump_Ant"]).round(1)
-
-    return {
-        "tbl":     tbl.sort_values("Cambio_Pct", ascending=False).reset_index(drop=True),
-        "sem_act": sem_act,
-        "sem_ant": sem_ant,
-        "total_act": tbl["Sem_Act"].sum(),
-        "total_ant": tbl["Sem_Ant"].sum(),
-        "total_proy_act": tbl["Proy_Act"].sum(),
-        "total_proy_ant": tbl["Proy_Ant"].sum(),
-    }
-
-
-def chart_wow_barras(wow):
-    """Barras agrupadas: semana anterior vs actual por sucursal."""
-    t = wow["tbl"].sort_values("Sem_Act", ascending=True)
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        x=t["Sem_Ant"], y=t["Sucursal"], orientation="h",
-        name=f"Sem {wow['sem_ant']} (Anterior)",
-        marker_color=C["slate"], opacity=.6,
-        hovertemplate="<b>%{y}</b><br>Anterior: Bs %{x:,.0f}<extra></extra>",
-    ))
-    fig.add_trace(go.Bar(
-        x=t["Sem_Act"], y=t["Sucursal"], orientation="h",
-        name=f"Sem {wow['sem_act']} (Actual)",
-        marker_color=C["yellow"], opacity=.92,
-        text=[f"Bs {v:,.0f}" for v in t["Sem_Act"]],
-        textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Actual: Bs %{x:,.0f}<extra></extra>",
-    ))
-    return _lay(fig, h=max(300, len(t)*58), barmode="group",
-                legend=dict(orientation="h", y=1.1),
-                margin=dict(l=20, r=160, t=35, b=20))
-
-
-def chart_wow_cambio(wow):
-    """Barras horizontales del % cambio semana vs semana."""
-    t = wow["tbl"].sort_values("Cambio_Pct", ascending=True)
-    colors = [C["green"] if v >= 0 else C["red"] for v in t["Cambio_Pct"]]
-    fig = go.Figure(go.Bar(
-        x=t["Cambio_Pct"], y=t["Sucursal"], orientation="h",
-        marker_color=colors,
-        text=[f"{'▲' if v>=0 else '▼'} {abs(v):.1f}%" for v in t["Cambio_Pct"]],
-        textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Cambio: %{x:.1f}%<extra></extra>",
-    ))
-    fig.add_vline(x=0, line_color=C["slate_lt"], line_width=1.5)
-    return _lay(fig, h=max(280, len(t)*52), showlegend=False,
-                xaxis_title="% Cambio vs semana anterior",
-                margin=dict(l=20, r=100, t=20, b=20))
-
-
-def chart_wow_cump(wow):
-    """Líneas de cumplimiento semana anterior vs actual."""
-    t   = wow["tbl"].sort_values("Cump_Act", ascending=False)
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=list(range(len(t))), y=t["Cump_Ant"],
-        mode="lines+markers", name=f"Sem {wow['sem_ant']} (Ant.)",
-        line=dict(color=C["slate_lt"], width=2, dash="dot"),
-        marker=dict(size=8),
-        hovertemplate="<b>%{text}</b><br>Ant.: %{y:.1f}%<extra></extra>",
-        text=t["Sucursal"].tolist(),
-    ))
-    fig.add_trace(go.Scatter(
-        x=list(range(len(t))), y=t["Cump_Act"],
-        mode="lines+markers", name=f"Sem {wow['sem_act']} (Act.)",
-        line=dict(color=C["yellow"], width=3),
-        marker=dict(size=10),
-        hovertemplate="<b>%{text}</b><br>Act.: %{y:.1f}%<extra></extra>",
-        text=t["Sucursal"].tolist(),
-    ))
-    fig.add_hline(y=100, line_dash="dash", line_color=C["green"], line_width=1.5)
-    fig.update_xaxes(
-        tickmode="array",
-        tickvals=list(range(len(t))),
-        ticktext=[s.replace("CF ","") for s in t["Sucursal"]],
-        tickangle=-20,
-    )
-    fig.update_yaxes(ticksuffix="%", range=[0, max(t["Cump_Ant"].max(), t["Cump_Act"].max())*1.15])
-    return _lay(fig, h=330, legend=dict(orientation="h", y=1.1))
-
-
-def chart_desviacion(df):
-    g = df.groupby("Fecha").agg(Desv=("Desviacion","sum")).reset_index().sort_values("Fecha")
-    g["Acum"] = g["Desv"].cumsum()
-    colors = [C["green"] if v>=0 else C["red"] for v in g["Desv"]]
-    fig = make_subplots(specs=[[{"secondary_y":True}]])
-    fig.add_trace(go.Bar(x=g["Fecha"],y=g["Desv"],name="Diaria",
-                         marker_color=colors,opacity=.8), secondary_y=False)
-    fig.add_trace(go.Scatter(x=g["Fecha"],y=g["Acum"],name="Acumulada",
-                             mode="lines",line=dict(color=C["slate_dark"],width=2.5)),
-                  secondary_y=True)
-    fig.add_hline(y=0,secondary_y=False,line_color=C["slate_lt"],line_width=1)
-    fig.update_layout(legend=dict(orientation="h",y=1.12))
-    return _lay(fig,h=300)
-
-# ─────────────────────────────────────────────────────────────────────────────
-# CARGA
-# ─────────────────────────────────────────────────────────────────────────────
-df_raw = load_data()
-
-if df_raw.empty:
-    st.markdown("""
-    <div style="text-align:center;padding:4rem">
-      <h2>📭 Sin datos</h2>
-      <p>Verifica que el Google Sheet esté compartido como
-      <strong>"Cualquier persona con el enlace → Lector"</strong>
-      y que la pestaña se llame <strong>BD_VENTAS_DIARIAS</strong>.</p>
-    </div>""", unsafe_allow_html=True)
+# ─────────────────────────────────────────────
+#  CARGA
+# ─────────────────────────────────────────────
+try:
+    df_all = load_data()
+except Exception as e:
+    st.error(f"❌ Error al cargar datos: {e}")
     st.stop()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# SIDEBAR
-# ─────────────────────────────────────────────────────────────────────────────
+if df_all.empty:
+    st.warning("No hay datos disponibles.")
+    st.stop()
+
+# ─────────────────────────────────────────────
+#  SIDEBAR
+# ─────────────────────────────────────────────
 with st.sidebar:
-    st.markdown(f"""
-    <div style="background:linear-gradient(135deg,{C['slate_dark']},{C['slate']});
-                padding:.9rem 1rem;border-radius:10px;
-                border-left:4px solid {C['yellow']};margin-bottom:.9rem;">
-      <h3 style="color:{C['yellow']};margin:0;font-size:.95rem;">🎛️ Filtros</h3>
-      <p style="color:#9CA3AF;font-size:.7rem;margin:.12rem 0 0;">
-        Auto-refresh: 60 s</p>
+    st.markdown(f"""<div style="text-align:center;padding:16px 0 24px 0;">
+        <div style="font-size:22px;font-weight:900;color:{CYAN};letter-spacing:1px;">⚡ VENTAS BI</div>
+        <div style="font-size:10px;color:{TEXT_DIM};letter-spacing:2px;margin-top:4px;">DASHBOARD DIARIO</div>
     </div>""", unsafe_allow_html=True)
 
-    st.markdown("**📅 Rango de Fechas**")
-    min_d = df_raw["Fecha"].min().date()
-    max_d = df_raw["Fecha"].max().date()
-    rango = st.date_input("Rango", value=(min_d, max_d),
-                          min_value=min_d, max_value=max_d,
+    st.markdown(f'<div style="font-size:10px;letter-spacing:1px;color:{TEXT_DIM};text-transform:uppercase;margin-bottom:4px;">📅 Período</div>', unsafe_allow_html=True)
+    fecha_min = df_all["FECHA"].min().date()
+    fecha_max = df_all["FECHA"].max().date()
+    rango = st.date_input("Rango", value=(fecha_min, fecha_max),
+                          min_value=fecha_min, max_value=fecha_max,
                           label_visibility="collapsed")
-    fi = rango[0] if isinstance(rango,(list,tuple)) and len(rango)==2 else min_d
-    ff = rango[1] if isinstance(rango,(list,tuple)) and len(rango)==2 else max_d
+    f_ini, f_fin = (rango[0], rango[1]) if len(rango) == 2 else (fecha_min, fecha_max)
 
-    st.divider()
+    st.markdown("<hr style='border-color:#1E3A4A;margin:12px 0;'>", unsafe_allow_html=True)
 
-    st.markdown("**🏢 Grupo**")
-    grupos = sorted(df_raw["Grupo"].unique())
-    sel_gr = st.multiselect("Grupos", grupos, default=list(grupos),
-                             label_visibility="collapsed")
+    grupos_disp = sorted(df_all["GRUPO"].dropna().unique())
+    st.markdown(f'<div style="font-size:10px;letter-spacing:1px;color:{TEXT_DIM};text-transform:uppercase;margin-bottom:4px;">🏷 Marca / Grupo</div>', unsafe_allow_html=True)
+    grupos_sel = st.multiselect("Grupos", grupos_disp, default=grupos_disp, label_visibility="collapsed")
 
-    st.markdown("**🏪 Sucursales**")
-    pool_suc = sorted(
-        df_raw[df_raw["Grupo"].isin(sel_gr)]["Sucursal"].unique()
-        if sel_gr else df_raw["Sucursal"].unique()
-    )
-    sel_suc = st.multiselect("Sucursales", pool_suc, default=pool_suc,
-                              label_visibility="collapsed")
+    suc_pool = sorted(
+        df_all.loc[df_all["GRUPO"].isin(grupos_sel), "SUCURSAL"].dropna().unique()
+    ) if grupos_sel else sorted(df_all["SUCURSAL"].dropna().unique())
+    st.markdown(f'<div style="font-size:10px;letter-spacing:1px;color:{TEXT_DIM};text-transform:uppercase;margin-bottom:4px;">🏪 Sucursales</div>', unsafe_allow_html=True)
+    suc_sel = st.multiselect("Sucursales", suc_pool, default=suc_pool, label_visibility="collapsed")
 
-    st.divider()
-    st.markdown("**⚠️ Umbral Alerta (%)**")
-    u_alert = st.slider("Alerta",  50, 100, int(UMBRAL_ALERT),  5, label_visibility="collapsed")
-    st.markdown("**🔴 Umbral Crítico (%)**")
-    u_crit  = st.slider("Crítico",  0,  80, int(UMBRAL_CRIT),   5, label_visibility="collapsed")
+    st.markdown("<hr style='border-color:#1E3A4A;margin:12px 0;'>", unsafe_allow_html=True)
+    from datetime import datetime
+    st.markdown(f'<div style="font-size:10px;color:{TEXT_DIM};text-align:center;">Actualizado: {datetime.now().strftime("%d/%m %H:%M")}<br>Auto-refresh cada 60s</div>', unsafe_allow_html=True)
 
-    st.divider()
-    st.caption(f"🕐 {datetime.now().strftime('%H:%M:%S')}  |  {len(df_raw):,} filas")
+# ─────────────────────────────────────────────
+#  FILTRADO
+# ─────────────────────────────────────────────
+mask = (
+    (df_all["FECHA"].dt.date >= f_ini) &
+    (df_all["FECHA"].dt.date <= f_fin)
+)
+if grupos_sel:
+    mask &= df_all["GRUPO"].isin(grupos_sel)
+if suc_sel:
+    mask &= df_all["SUCURSAL"].isin(suc_sel)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FILTROS
-# ─────────────────────────────────────────────────────────────────────────────
-df = df_raw.copy()
-df = df[(df["Fecha"].dt.date >= fi) & (df["Fecha"].dt.date <= ff)]
-if sel_suc:
-    df = df[df["Sucursal"].isin(sel_suc)]
+df = df_all[mask].copy()
 
 if df.empty:
-    st.warning("⚠️ Sin datos para la selección actual.")
+    st.warning("Sin datos para los filtros seleccionados.")
     st.stop()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MÉTRICAS GLOBALES
-# ─────────────────────────────────────────────────────────────────────────────
-venta_real  = df["V_Real"].sum()
-venta_proy  = df["V_Proyectada"].sum()
-desv_total  = df["Desviacion"].sum()
-cump_global = (venta_real / venta_proy * 100) if venta_proy > 0 else 0
-dias_analiz = df["Fecha"].nunique()
-dias_sobre  = int(df[df["Sobre_Meta"]]["Fecha"].nunique())
+# ─────────────────────────────────────────────
+#  MÉTRICAS
+# ─────────────────────────────────────────────
+total_real = df["REAL"].sum()
+total_proy = df["PROYECTADA"].sum() if "PROYECTADA" in df.columns else np.nan
+cump_global = (total_real / total_proy * 100) if (not np.isnan(total_proy) and total_proy > 0) else np.nan
+dias_total  = df["FECHA"].dt.date.nunique()
 
-hoy = date.today()
-mask_mes = (df["Fecha"].dt.year == hoy.year) & (df["Fecha"].dt.month == hoy.month)
-rr = calcular_run_rate(df[mask_mes], df)
+# Run rate
+hoy        = df["FECHA"].max()
+dias_mes   = pd.Period(f"{hoy.year}-{hoy.month}", "M").days_in_month
+dias_trans  = hoy.day
+df_mes      = df[df["FECHA"].dt.to_period("M") == hoy.to_period("M")]
+venta_mes   = df_mes["REAL"].sum()
+run_rate    = (venta_mes / dias_trans * dias_mes) if dias_trans > 0 else np.nan
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HEADER
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown(f"""
-<div class="dash-header">
-  <h1>📊 Dashboard de Ventas — Panel Ejecutivo</h1>
-  <p>📅 {fi.strftime('%d/%m/%Y')} → {ff.strftime('%d/%m/%Y')}
-     &nbsp;|&nbsp; 🏪 {len(sel_suc) if sel_suc else len(pool_suc)} sucursales
-     &nbsp;|&nbsp; 📋 {len(df):,} registros
-     &nbsp;|&nbsp; ⏱️ {datetime.now().strftime('%H:%M')}</p>
-</div>
-""", unsafe_allow_html=True)
+# Días sobre meta
+daily_sums = df.groupby(df["FECHA"].dt.date).agg(R=("REAL","sum"), P=("PROYECTADA","sum"))
+dias_sobre = int((daily_sums["R"] >= daily_sums["P"]).sum()) if "PROYECTADA" in df.columns else 0
 
-# ─────────────────────────────────────────────────────────────────────────────
-# TABS
-# ─────────────────────────────────────────────────────────────────────────────
-t1,t2,t3,t4,t5 = st.tabs([
-    "📊 Gerencia","💰 Comercial","📈 Tendencias","⚙️ Operaciones","🎯 Metas y Alertas"
-])
+suc_agg = (
+    df.groupby("SUCURSAL")
+    .agg(REAL=("REAL","sum"), PROYECTADA=("PROYECTADA","sum"), GRUPO=("GRUPO","first"))
+    .reset_index()
+)
+suc_agg["CUMPLIMIENTO"] = np.where(
+    suc_agg["PROYECTADA"] > 0,
+    suc_agg["REAL"] / suc_agg["PROYECTADA"] * 100,
+    np.nan
+)
+suc_agg = suc_agg.sort_values("REAL", ascending=False)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 — GERENCIA
-# ══════════════════════════════════════════════════════════════════════════════
-with t1:
-    c1,c2,c3,c4 = st.columns(4)
-    with c1: kpi("💵 Venta Real Total", fmt(venta_real))
-    with c2: kpi("🎯 Venta Proyectada", fmt(venta_proy))
-    with c3:
-        bt = "bp" if cump_global>=100 else ("bw" if cump_global>=u_alert else "bn")
-        kpi("📈 Cumplimiento Global", fmt_pct(cump_global),
-            badge=f"{'▲' if cump_global>=100 else '▼'} {abs(cump_global-100):.1f}%", bt=bt)
-    with c4:
-        kpi("📊 Desviación Total", fmt(desv_total),
-            badge="▲ Superávit" if desv_total>=0 else "▼ Déficit",
-            bt="bp" if desv_total>=0 else "bn")
+# ════════════════════════════════════════════
+#  HEADER
+# ════════════════════════════════════════════
+periodo_str = f"{f_ini.strftime('%d %b')} – {f_fin.strftime('%d %b %Y')}"
+cump_color  = pct_color(cump_global)
+ch1, ch2 = st.columns([3,1])
+with ch1:
+    st.markdown(f"""<div style="padding:4px 0 14px 0;">
+        <span style="font-size:22px;font-weight:900;color:{TEXT};">Sales Intelligence</span>
+        <span style="font-size:13px;color:{TEXT_DIM};margin-left:10px;">{periodo_str}</span>
+    </div>""", unsafe_allow_html=True)
+with ch2:
+    st.markdown(f"""<div style="text-align:right;padding:4px 0 14px 0;">
+        <span style="font-size:24px;font-weight:900;color:{cump_color};">{fmt_pct(cump_global)}</span><br>
+        <span style="font-size:10px;color:{TEXT_DIM};letter-spacing:1px;">CUMPLIMIENTO GLOBAL</span>
+    </div>""", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+# ════════════════════════════════════════════
+#  KPI ROW
+# ════════════════════════════════════════════
+k1,k2,k3,k4,k5 = st.columns(5)
+with k1:
+    kpi("⚡ VENTA REAL TOTAL", fmt_bs(total_real), f"{dias_total} días analizados", CYAN)
+with k2:
+    kpi("🎯 VENTA PROYECTADA", fmt_bs(total_proy), "meta acumulada", BLUE)
+with k3:
+    kpi("📈 RUN RATE MES", fmt_bs(run_rate), f"proyección {dias_mes} días", YELLOW)
+with k4:
+    best_suc = suc_agg.iloc[0]["SUCURSAL"] if not suc_agg.empty else "—"
+    best_val = suc_agg.iloc[0]["REAL"] if not suc_agg.empty else np.nan
+    label    = (best_suc[:16]+"…") if len(best_suc) > 16 else best_suc
+    kpi("🏆 TOP SUCURSAL", label, fmt_bs(best_val), GREEN)
+with k5:
+    pct_dias = (dias_sobre / dias_total * 100) if dias_total > 0 else 0
+    kpi("✅ DÍAS SOBRE META", f"{dias_sobre}/{dias_total}", f"{pct_dias:.0f}% del período",
+        GREEN if pct_dias >= 50 else YELLOW)
 
-    col_rr, col_g = st.columns([1,2])
-    with col_rr:
-        delta_rr = ((rr["run_rate"]-rr["venta_ant"])/rr["venta_ant"]*100
-                    if rr["venta_ant"]>0 else 0)
-        proy_pct = (rr["run_rate"]/rr["proy_total"]*100 if rr["proy_total"]>0 else 0)
-        st.markdown(f"""
-        <div class="kpi-dark">
-          <div class="kpi-title">🚀 RUN RATE — {rr['mes_label'].upper()}</div>
-          <div class="kpi-value">{fmt(rr['run_rate'])}</div>
-          <span class="badge {'bp' if delta_rr>=0 else 'bn'}">
-            {'▲' if delta_rr>=0 else '▼'} {abs(delta_rr):.1f}% vs mes anterior
-          </span><br>
-          <span class="badge bnu">🎯 {proy_pct:.1f}% de meta proyectada</span>
-          <br><br>
-          <small style="color:#9CA3AF">
-            Acumulado: {fmt(rr['venta_acum'])}<br>
-            Día {rr['d_cur']} de {rr['d_mes']} &nbsp;|&nbsp; Meta: {fmt(rr['proy_total'])}
-          </small>
+divider()
+
+# ════════════════════════════════════════════
+#  SECCIÓN 1 — EVOLUCIÓN DIARIA
+# ════════════════════════════════════════════
+sec("📊", "EVOLUCIÓN DIARIA DE VENTAS")
+
+daily = (
+    df.groupby("FECHA")
+    .agg(REAL=("REAL","sum"), PROYECTADA=("PROYECTADA","sum"))
+    .reset_index()
+    .sort_values("FECHA")
+)
+daily["CUMP"] = np.where(
+    daily["PROYECTADA"] > 0,
+    daily["REAL"] / daily["PROYECTADA"] * 100,
+    np.nan
+)
+daily["DOT_COLOR"] = daily["CUMP"].apply(pct_color)
+
+col_c, col_d = st.columns([3,1])
+with col_c:
+    fig = go.Figure()
+    # Área Real
+    fig.add_trace(go.Scatter(
+        x=daily["FECHA"], y=daily["REAL"],
+        name="Venta Real",
+        mode="lines",
+        line=dict(color=CYAN, width=2.5),
+        fill="tozeroy", fillcolor=CYAN_D,
+        hovertemplate="<b>%{x|%d %b %Y}</b><br>Real: Bs %{y:,.0f}<extra></extra>",
+    ))
+    # Línea meta
+    fig.add_trace(go.Scatter(
+        x=daily["FECHA"], y=daily["PROYECTADA"],
+        name="Meta",
+        mode="lines",
+        line=dict(color=BLUE, width=1.5, dash="dot"),
+        hovertemplate="<b>%{x|%d %b}</b><br>Meta: Bs %{y:,.0f}<extra></extra>",
+    ))
+    # Puntos coloreados
+    fig.add_trace(go.Scatter(
+        x=daily["FECHA"], y=daily["REAL"],
+        mode="markers",
+        marker=dict(color=daily["DOT_COLOR"].tolist(), size=7,
+                    line=dict(width=1, color=BG3)),
+        showlegend=False,
+        hoverinfo="skip",
+    ))
+    fig.update_layout(**dark_layout(
+        height=340,
+        margin=dict(l=10,r=10,t=36,b=10),
+        xaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM,size=11)),
+        yaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM,size=11), zeroline=False),
+    ))
+    st.plotly_chart(fig, use_container_width=True)
+
+with col_d:
+    top5 = daily.nlargest(5,"REAL")[["FECHA","REAL","CUMP"]].reset_index(drop=True)
+    bot5 = daily.nsmallest(5,"REAL")[["FECHA","REAL","CUMP"]].reset_index(drop=True)
+
+    st.markdown(f'<div style="font-size:10px;color:{GREEN};letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">🔥 Mejores días</div>', unsafe_allow_html=True)
+    for _, r in top5.iterrows():
+        c = pct_color(r["CUMP"])
+        st.markdown(f"""<div style="display:flex;justify-content:space-between;align-items:center;
+            padding:5px 8px;background:{BG3};border-radius:5px;margin-bottom:3px;">
+            <span style="color:{TEXT_DIM};font-size:11px;">{r['FECHA'].strftime('%a %d %b')}</span>
+            <span style="color:{CYAN};font-size:12px;font-weight:700;">Bs {int(r['REAL']):,}</span>
+            <span style="color:{c};font-size:10px;">{fmt_pct(r['CUMP'])}</span>
         </div>""", unsafe_allow_html=True)
-    with col_g:
-        st.plotly_chart(chart_gauge(cump_global), use_container_width=True)
 
-    sec("📅 Venta Real vs Proyectada — Evolución Diaria")
-    st.plotly_chart(chart_tendencia(df), use_container_width=True)
+    st.markdown(f'<div style="font-size:10px;color:{RED};letter-spacing:1px;text-transform:uppercase;margin:10px 0 6px 0;">📉 Días más bajos</div>', unsafe_allow_html=True)
+    for _, r in bot5.iterrows():
+        c = pct_color(r["CUMP"])
+        st.markdown(f"""<div style="display:flex;justify-content:space-between;align-items:center;
+            padding:5px 8px;background:{BG3};border-radius:5px;margin-bottom:3px;">
+            <span style="color:{TEXT_DIM};font-size:11px;">{r['FECHA'].strftime('%a %d %b')}</span>
+            <span style="color:{TEXT};font-size:12px;font-weight:700;">Bs {int(r['REAL']):,}</span>
+            <span style="color:{c};font-size:10px;">{fmt_pct(r['CUMP'])}</span>
+        </div>""", unsafe_allow_html=True)
 
-    sec("🏢 Resumen por Grupo")
-    g_grp = df.groupby("Grupo").agg(
-        Real=("V_Real","sum"), Proy=("V_Proyectada","sum"), Desv=("Desviacion","sum")
-    ).reset_index()
-    g_grp["Cumpl_%"] = (g_grp["Real"]/g_grp["Proy"].replace(0,np.nan)*100).round(1)
-    g_grp["Real"]     = g_grp["Real"].apply(fmt)
-    g_grp["Proy"]     = g_grp["Proy"].apply(fmt)
-    g_grp["Desv"]     = g_grp["Desv"].apply(fmt)
-    g_grp["Cumpl_%"]  = g_grp["Cumpl_%"].apply(fmt_pct)
-    st.dataframe(g_grp, use_container_width=True, hide_index=True)
+divider()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 — COMERCIAL
-# ══════════════════════════════════════════════════════════════════════════════
-with t2:
-    g_suc = df.groupby("Sucursal").agg(
-        Real=("V_Real","sum"), Proy=("V_Proyectada","sum")
-    ).reset_index()
-    g_suc["Cump"] = (g_suc["Real"]/g_suc["Proy"].replace(0,np.nan)*100)
-    mejor = g_suc.loc[g_suc["Cump"].idxmax()]
-    peor  = g_suc.loc[g_suc["Cump"].idxmin()]
+# ════════════════════════════════════════════
+#  SECCIÓN 2 — SUCURSALES | SEMANA A SEMANA
+# ════════════════════════════════════════════
+col_suc, col_wow = st.columns(2)
 
-    c1,c2,c3,c4 = st.columns(4)
-    with c1: kpi("🏪 Sucursales", str(df["Sucursal"].nunique()))
-    with c2: kpi("🥇 Mayor Cumpl.", mejor["Sucursal"].title(),
-                 badge=fmt_pct(mejor["Cump"]), bt="bp", variant="green")
-    with c3: kpi("⚠️ Menor Cumpl.", peor["Sucursal"].title(),
-                 badge=fmt_pct(peor["Cump"]), bt="bn", variant="red")
-    with c4: kpi("📅 Días Analizados", str(dias_analiz))
+with col_suc:
+    sec("🏪", "RANKING POR SUCURSAL")
+    fig2 = go.Figure()
+    fig2.add_trace(go.Bar(
+        y=suc_agg["SUCURSAL"], x=suc_agg["PROYECTADA"],
+        name="Meta", orientation="h",
+        marker_color=BG4,
+        hovertemplate="%{y}<br>Meta: Bs %{x:,.0f}<extra></extra>",
+    ))
+    fig2.add_trace(go.Bar(
+        y=suc_agg["SUCURSAL"], x=suc_agg["REAL"],
+        name="Real", orientation="h",
+        marker=dict(color=[pct_color(v) for v in suc_agg["CUMPLIMIENTO"]], opacity=0.85),
+        text=[f"Bs {int(v):,}  {fmt_pct(c)}" for v,c in zip(suc_agg["REAL"],suc_agg["CUMPLIMIENTO"])],
+        textposition="outside",
+        textfont=dict(size=9, color=TEXT_DIM),
+        hovertemplate="%{y}<br>Real: Bs %{x:,.0f}<extra></extra>",
+    ))
+    h_suc = max(260, len(suc_agg)*34 + 60)
+    fig2.update_layout(**dark_layout(
+        barmode="overlay", height=h_suc,
+        margin=dict(l=10,r=110,t=36,b=10),
+        xaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM,size=9), showticklabels=False),
+        yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT,size=10), autorange="reversed"),
+        showlegend=False,
+    ))
+    st.plotly_chart(fig2, use_container_width=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+with col_wow:
+    sec("📆", "SEMANA VS SEMANA")
+    semanas = sorted(df["SEMANA_ISO"].unique(), reverse=True)
+    DIAS_ORD = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
 
-    col_b, col_c = st.columns([3,2])
-    with col_b:
-        sec("🏪 Real vs Proyectada por Sucursal")
-        st.plotly_chart(chart_real_vs_proy(df), use_container_width=True)
-    with col_c:
-        sec("📊 % Cumplimiento")
-        st.plotly_chart(chart_cump(df), use_container_width=True)
+    if len(semanas) >= 2:
+        sem_act, sem_ant = semanas[0], semanas[1]
+        tot_act = df[df["SEMANA_ISO"]==sem_act]["REAL"].sum()
+        tot_ant = df[df["SEMANA_ISO"]==sem_ant]["REAL"].sum()
+        diff    = ((tot_act - tot_ant) / tot_ant * 100) if tot_ant > 0 else 0
+        dc      = GREEN if diff >= 0 else RED
+        arrow   = "▲" if diff >= 0 else "▼"
 
-    sec("📋 Detalle por Sucursal")
-    det = df.groupby("Sucursal").agg(
-        Real=("V_Real","sum"), Proy=("V_Proyectada","sum"),
-        Desv=("Desviacion","sum"), Cump=("Pct_Cump","mean"),
-        Dias=("Fecha","nunique"), Sobre=("Sobre_Meta","sum")
-    ).reset_index().sort_values("Cump", ascending=False)
-    det["Bajo_Meta"] = det["Dias"] - det["Sobre"]
-    det["Real"]  = det["Real"].apply(fmt)
-    det["Proy"]  = det["Proy"].apply(fmt)
-    det["Desv"]  = det["Desv"].apply(fmt)
-    det["Cump"]  = det["Cump"].apply(fmt_pct)
-    det["Sobre"] = det["Sobre"].astype(int)
-    det["Bajo_Meta"] = det["Bajo_Meta"].astype(int)
-    st.dataframe(det.rename(columns={
-        "Dias":"Días","Sobre":"✅ Sobre","Bajo_Meta":"❌ Bajo"
-    }), use_container_width=True, hide_index=True)
+        st.markdown(f"""<div style="display:flex;gap:8px;margin-bottom:12px;">
+            <div style="flex:1;background:{BG3};border:1px solid {BORDER};border-radius:8px;padding:12px;text-align:center;">
+                <div style="font-size:9px;color:{TEXT_DIM};letter-spacing:1px;margin-bottom:3px;">SEM {sem_act} (actual)</div>
+                <div style="font-size:18px;font-weight:800;color:{CYAN};">Bs {int(tot_act):,}</div>
+            </div>
+            <div style="flex:1;background:{BG3};border:1px solid {BORDER};border-radius:8px;padding:12px;text-align:center;">
+                <div style="font-size:9px;color:{TEXT_DIM};letter-spacing:1px;margin-bottom:3px;">SEM {sem_ant} (anterior)</div>
+                <div style="font-size:18px;font-weight:800;color:{TEXT};">Bs {int(tot_ant):,}</div>
+            </div>
+            <div style="background:{BG3};border:1px solid {dc};border-radius:8px;padding:12px;text-align:center;min-width:72px;">
+                <div style="font-size:9px;color:{TEXT_DIM};letter-spacing:1px;margin-bottom:3px;">VARIACIÓN</div>
+                <div style="font-size:18px;font-weight:800;color:{dc};">{arrow}{abs(diff):.1f}%</div>
+            </div>
+        </div>""", unsafe_allow_html=True)
 
-    if not rr["rr_suc"].empty:
-        sec(f"🚀 Run Rate por Sucursal — {rr['mes_label']}")
-        d = rr["rr_suc"].copy()
-        d["Acumulado"]  = d["Acumulado"].apply(fmt)
-        d["Run_Rate"]   = d["Run_Rate"].apply(fmt)
-        d["Proy_Total"] = d["Proy_Total"].apply(fmt)
-        d["Delta"]      = d["Delta"].apply(fmt)
-        st.dataframe(d.rename(columns={
-            "Acumulado":"Acumulado Mes","Run_Rate":"Proyec. Cierre",
-            "Proy_Total":"Meta Proyectada","Delta":"Diferencia"
-        }), use_container_width=True, hide_index=True)
+        d_act = df[df["SEMANA_ISO"]==sem_act].groupby("DIA_SEMANA")["REAL"].sum().reindex(DIAS_ORD, fill_value=0)
+        d_ant = df[df["SEMANA_ISO"]==sem_ant].groupby("DIA_SEMANA")["REAL"].sum().reindex(DIAS_ORD, fill_value=0)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 — TENDENCIAS
-# ══════════════════════════════════════════════════════════════════════════════
-with t3:
-
-    # ── COMPARACIÓN SEMANA A SEMANA ──────────────────────────────────────────
-    wow = get_wow_data(df)
-
-    if wow is None:
-        st.info("ℹ️ Se necesitan al menos 2 semanas de datos para la comparación WoW.")
+        fig3 = go.Figure()
+        fig3.add_trace(go.Bar(
+            name=f"Sem {sem_ant}", x=DIAS_ORD, y=d_ant.values,
+            marker_color=BG4,
+            hovertemplate="%{x}<br>Bs %{y:,.0f}<extra></extra>",
+        ))
+        fig3.add_trace(go.Bar(
+            name=f"Sem {sem_act}", x=DIAS_ORD, y=d_act.values,
+            marker_color=CYAN, opacity=0.85,
+            hovertemplate="%{x}<br>Bs %{y:,.0f}<extra></extra>",
+        ))
+        fig3.update_layout(**dark_layout(
+            barmode="group", height=200,
+            margin=dict(l=10,r=10,t=10,b=10),
+            xaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT_DIM,size=10)),
+            yaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM,size=10), zeroline=False),
+            legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT_DIM,size=10),
+                        orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+        ))
+        st.plotly_chart(fig3, use_container_width=True)
     else:
-        cambio_total     = wow["total_act"] - wow["total_ant"]
-        cambio_total_pct = (cambio_total / wow["total_ant"] * 100) if wow["total_ant"] > 0 else 0
-        cump_act_tot     = (wow["total_act"] / wow["total_proy_act"] * 100) if wow["total_proy_act"] > 0 else 0
-        cump_ant_tot     = (wow["total_ant"] / wow["total_proy_ant"] * 100) if wow["total_proy_ant"] > 0 else 0
-        delta_cump       = cump_act_tot - cump_ant_tot
+        st.info("Se necesitan al menos 2 semanas de datos.")
 
-        mejor_wow  = wow["tbl"].loc[wow["tbl"]["Cambio_Pct"].idxmax()]
-        peor_wow   = wow["tbl"].loc[wow["tbl"]["Cambio_Pct"].idxmin()]
+divider()
 
-        sec(f"📅 Comparación Semana a Semana  ·  Sem {wow['sem_ant']} vs Sem {wow['sem_act']}")
+# ════════════════════════════════════════════
+#  SECCIÓN 3 — HISTÓRICO DÍAS | HEATMAP
+# ════════════════════════════════════════════
+col_h, col_hm = st.columns(2)
+DIAS_ORD = ["Lunes","Martes","Miércoles","Jueves","Viernes","Sábado","Domingo"]
 
-        c1,c2,c3,c4 = st.columns(4)
-        with c1:
-            kpi(f"📦 Sem {wow['sem_act']} (Actual)", fmt(wow["total_act"]),
-                badge=fmt_pct(cump_act_tot) + " cumpl.", bt="bp" if cump_act_tot>=100 else "bw")
-        with c2:
-            kpi(f"📦 Sem {wow['sem_ant']} (Anterior)", fmt(wow["total_ant"]),
-                badge=fmt_pct(cump_ant_tot) + " cumpl.", bt="bnu")
-        with c3:
-            kpi("📈 Cambio Semana", fmt(cambio_total),
-                badge=f"{'▲' if cambio_total_pct>=0 else '▼'} {abs(cambio_total_pct):.1f}%",
-                bt="bp" if cambio_total>=0 else "bn")
-        with c4:
-            kpi("🎯 Δ Cumplimiento", fmt_pct(delta_cump),
-                badge=f"{'▲' if delta_cump>=0 else '▼'} puntos porcentuales",
-                bt="bp" if delta_cump>=0 else "bn")
+with col_h:
+    sec("📅", "HISTÓRICO: QUÉ DÍA SE VENDE MÁS")
 
-        st.markdown("<br>", unsafe_allow_html=True)
-
-        # Barras agrupadas + cambio %
-        col_bar, col_chg = st.columns([3, 2])
-        with col_bar:
-            st.plotly_chart(chart_wow_barras(wow), use_container_width=True)
-        with col_chg:
-            st.plotly_chart(chart_wow_cambio(wow), use_container_width=True)
-
-        # Líneas de cumplimiento
-        st.plotly_chart(chart_wow_cump(wow), use_container_width=True)
-
-        # Tabla detallada WoW
-        tbl_disp = wow["tbl"].copy()
-        tbl_disp["Tendencia"] = tbl_disp["Cambio_Pct"].apply(
-            lambda v: f"▲ {abs(v):.1f}%" if v >= 0 else f"▼ {abs(v):.1f}%"
-        )
-        tbl_disp["Δ Cumpl."] = tbl_disp["Delta_Cump"].apply(
-            lambda v: f"▲ {abs(v):.1f}pp" if v >= 0 else f"▼ {abs(v):.1f}pp"
-        )
-        for col in ["Sem_Ant","Sem_Act","Cambio"]:
-            tbl_disp[col] = tbl_disp[col].apply(fmt)
-        tbl_disp["Cump_Ant"] = tbl_disp["Cump_Ant"].apply(fmt_pct)
-        tbl_disp["Cump_Act"] = tbl_disp["Cump_Act"].apply(fmt_pct)
-
-        st.dataframe(
-            tbl_disp[["Sucursal","Sem_Ant","Cump_Ant","Sem_Act","Cump_Act","Cambio","Tendencia","Δ Cumpl."]].rename(columns={
-                "Sem_Ant": f"Sem {wow['sem_ant']}",
-                "Cump_Ant": f"Cumpl. {wow['sem_ant']}",
-                "Sem_Act": f"Sem {wow['sem_act']}",
-                "Cump_Act": f"Cumpl. {wow['sem_act']}",
-                "Cambio": "Δ Venta",
-            }),
-            use_container_width=True, hide_index=True
-        )
-
-        # Ganadores y perdedores
-        col_g, col_p = st.columns(2)
-        with col_g:
-            st.markdown(f"""
-            <div class="alert-g">
-              🏆 <strong>Mayor crecimiento:</strong> {mejor_wow['Sucursal']}
-              &nbsp;|&nbsp; ▲ {mejor_wow['Cambio_Pct']:.1f}%
-              &nbsp;|&nbsp; {fmt(mejor_wow['Sem_Ant'])} → {fmt(mejor_wow['Sem_Act'])}
-            </div>""", unsafe_allow_html=True)
-        with col_p:
-            st.markdown(f"""
-            <div class="alert-r">
-              ⚠️ <strong>Mayor caída:</strong> {peor_wow['Sucursal']}
-              &nbsp;|&nbsp; ▼ {abs(peor_wow['Cambio_Pct']):.1f}%
-              &nbsp;|&nbsp; {fmt(peor_wow['Sem_Ant'])} → {fmt(peor_wow['Sem_Act'])}
-            </div>""", unsafe_allow_html=True)
-
-    st.divider()
-
-    sec("📈 Venta Real por Sucursal — Evolución Diaria")
-    st.plotly_chart(chart_por_sucursal(df), use_container_width=True)
-
-    sec("🗓️ Mapa de Calor: % Cumplimiento por Sucursal y Día")
-    st.plotly_chart(chart_heatmap(df), use_container_width=True)
-
-    sec("📉 Desviación Diaria y Acumulada")
-    st.plotly_chart(chart_desviacion(df), use_container_width=True)
-
-    sec("📋 Pivot Semanal — Venta Real por Sucursal")
-    piv = (df.groupby(["Semana","Sucursal"])["V_Real"].sum().reset_index()
-             .pivot(index="Sucursal",columns="Semana",values="V_Real").fillna(0))
-    piv.columns = [f"Sem {c}" for c in piv.columns]
-    st.dataframe(piv.map(fmt), use_container_width=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 4 — OPERACIONES
-# ══════════════════════════════════════════════════════════════════════════════
-with t4:
-    orden_sem = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"]
-    es_dia = {"Monday":"Lunes","Tuesday":"Martes","Wednesday":"Miércoles",
-              "Thursday":"Jueves","Friday":"Viernes","Saturday":"Sábado","Sunday":"Domingo"}
-    g_dia_venta = df.groupby("Dia_Sem")["V_Real"].sum().reindex(orden_sem)
-    mejor_dia   = es_dia.get(g_dia_venta.idxmax(), "—")
-    prom_real   = df.groupby("Fecha")["V_Real"].sum().mean()
-    prom_proy   = df.groupby("Fecha")["V_Proyectada"].sum().mean()
-
-    c1,c2,c3,c4 = st.columns(4)
-    with c1: kpi("📅 Días con Datos", str(dias_analiz))
-    with c2: kpi("✅ Días Sobre Meta", str(dias_sobre),
-                 badge=f"{dias_sobre/max(dias_analiz,1)*100:.0f}% de los días",
-                 bt="bp" if dias_sobre/max(dias_analiz,1)>=.5 else "bn")
-    with c3: kpi("⚡ Mejor Día Sem.", mejor_dia)
-    with c4: kpi("📊 Prom. Diario", fmt(prom_real),
-                 badge=f"Meta: {fmt(prom_proy)}", bt="bnu")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-
-    sec("📅 Rendimiento por Día de la Semana")
-    st.plotly_chart(chart_dia_semana(df), use_container_width=True)
-
-    g_dias = df.groupby("Fecha").agg(
-        Real=("V_Real","sum"), Proy=("V_Proyectada","sum")
-    ).reset_index()
-    g_dias["Cump"] = (g_dias["Real"]/g_dias["Proy"].replace(0,np.nan)*100).round(1)
-    g_dias["Fecha_s"] = g_dias["Fecha"].dt.strftime("%a %d/%m")
-
-    col_t, col_b = st.columns(2)
-    with col_t:
-        sec("🏆 Top 5 Mejores Días")
-        t5d = g_dias.nlargest(5,"Cump")[["Fecha_s","Real","Cump"]].copy()
-        t5d["Real"] = t5d["Real"].apply(fmt)
-        t5d["Cump"] = t5d["Cump"].apply(fmt_pct)
-        st.dataframe(t5d.rename(columns={"Fecha_s":"Fecha","Cump":"Cumpl."}),
-                     use_container_width=True, hide_index=True)
-    with col_b:
-        sec("⚠️ Top 5 Peores Días")
-        b5d = g_dias.nsmallest(5,"Cump")[["Fecha_s","Real","Cump"]].copy()
-        b5d["Real"] = b5d["Real"].apply(fmt)
-        b5d["Cump"] = b5d["Cump"].apply(fmt_pct)
-        st.dataframe(b5d.rename(columns={"Fecha_s":"Fecha","Cump":"Cumpl."}),
-                     use_container_width=True, hide_index=True)
-
-    sec("📐 Variabilidad del Cumplimiento por Sucursal")
-    g_var = df.groupby("Sucursal")["Pct_Cump"].agg(
-        Media="mean", Min="min", Max="max", Desv_Std="std"
-    ).round(1).reset_index().sort_values("Media", ascending=False)
-    for col in ["Media","Min","Max","Desv_Std"]:
-        g_var[col] = g_var[col].apply(fmt_pct)
-    st.dataframe(g_var, use_container_width=True, hide_index=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — METAS Y ALERTAS
-# ══════════════════════════════════════════════════════════════════════════════
-with t5:
-    g_est = df.groupby("Sucursal").agg(
-        Real=("V_Real","sum"), Proy=("V_Proyectada","sum"),
-        Desv=("Desviacion","sum"), Dias=("Fecha","nunique"),
-        Sobre=("Sobre_Meta","sum")
-    ).reset_index()
-    g_est["Cump"] = (g_est["Real"]/g_est["Proy"].replace(0,np.nan)*100).round(1)
-    g_est["Estado"] = g_est["Cump"].apply(
-        lambda c: "🔴 Crítico" if c<u_crit else ("🟡 Alerta" if c<u_alert else "🟢 En Meta")
+    hist = (
+        df.groupby("DIA_SEMANA")
+        .agg(PROM=("REAL","mean"), TOTAL=("REAL","sum"), N=("REAL","count"))
+        .reindex(DIAS_ORD)
+        .reset_index()
     )
+    max_p = hist["PROM"].max()
 
-    n_crit  = (g_est["Cump"]<u_crit).sum()
-    n_alert = ((g_est["Cump"]>=u_crit) & (g_est["Cump"]<u_alert)).sum()
-    n_meta  = (g_est["Cump"]>=u_alert).sum()
+    fig4 = go.Figure()
+    fig4.add_trace(go.Bar(
+        x=hist["DIA_SEMANA"],
+        y=hist["PROM"].fillna(0),
+        marker=dict(
+            color=hist["PROM"].fillna(0).tolist(),
+            colorscale=[[0,BG4],[0.5,BLUE],[1,CYAN]],
+            showscale=False,
+        ),
+        text=[f"Bs {int(v):,}" if not np.isnan(v) else "" for v in hist["PROM"]],
+        textposition="outside",
+        textfont=dict(size=10, color=TEXT_DIM),
+        hovertemplate="<b>%{x}</b><br>Promedio: Bs %{y:,.0f}<extra></extra>",
+    ))
+    fig4.update_layout(**dark_layout(
+        height=280,
+        margin=dict(l=10,r=10,t=36,b=10),
+        xaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT,size=11)),
+        yaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM,size=10),
+                   zeroline=False, showticklabels=False),
+        showlegend=False,
+    ))
+    st.plotly_chart(fig4, use_container_width=True)
 
-    c1,c2,c3,c4 = st.columns(4)
-    with c1: kpi("🔴 Crítico",   str(n_crit),  badge=f"< {u_crit}%",  bt="bn", variant="red")
-    with c2: kpi("🟡 En Alerta", str(n_alert), badge=f"{u_crit}–{u_alert}%", bt="bw")
-    with c3: kpi("🟢 En Meta",   str(n_meta),  badge=f"≥ {u_alert}%", bt="bp", variant="green")
-    with c4:
-        bt = "bp" if cump_global>=100 else ("bw" if cump_global>=u_alert else "bn")
-        kpi("📊 Cumpl. Global", fmt_pct(cump_global), bt=bt)
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    sec("🚨 Estado por Sucursal")
-
-    for _, r in g_est.sort_values("Cump").iterrows():
-        cls = ("alert-r" if r["Cump"]<u_crit else
-               "alert-w" if r["Cump"]<u_alert else "alert-g")
-        dias_txt = f"{int(r['Sobre'])}/{int(r['Dias'])} días sobre meta"
-        st.markdown(f"""
-        <div class="{cls}">
-          {r['Estado']} &nbsp;<strong>{r['Sucursal']}</strong>
-          &nbsp;|&nbsp; Real: <strong>{fmt(r['Real'])}</strong>
-          &nbsp;|&nbsp; Meta: <strong>{fmt(r['Proy'])}</strong>
-          &nbsp;|&nbsp; Desv: <strong>{fmt(r['Desv'])}</strong>
-          &nbsp;|&nbsp; {dias_txt}
-          {barra(r['Cump'])}
+    if not hist["PROM"].isna().all():
+        best_d = hist.loc[hist["PROM"].idxmax(), "DIA_SEMANA"]
+        low_d  = hist.loc[hist["PROM"].idxmin(), "DIA_SEMANA"]
+        st.markdown(f"""<div style="display:flex;gap:8px;margin-top:4px;">
+            <div style="flex:1;background:{GREEN_D};border-left:3px solid {GREEN};border-radius:6px;padding:8px 10px;">
+                <div style="font-size:9px;color:{GREEN};letter-spacing:1px;">MEJOR DÍA</div>
+                <div style="font-size:15px;font-weight:700;color:{TEXT};">{best_d}</div>
+            </div>
+            <div style="flex:1;background:{RED_D};border-left:3px solid {RED};border-radius:6px;padding:8px 10px;">
+                <div style="font-size:9px;color:{RED};letter-spacing:1px;">DÍA MÁS BAJO</div>
+                <div style="font-size:15px;font-weight:700;color:{TEXT};">{low_d}</div>
+            </div>
         </div>""", unsafe_allow_html=True)
 
-    if not rr["rr_suc"].empty:
-        sec(f"📅 Proyección de Cierre — {rr['mes_label']}")
-        st.info(f"📌 Run Rate General: **{fmt(rr['run_rate'])}** "
-                f"(Día {rr['d_cur']} de {rr['d_mes']})")
-        d = rr["rr_suc"].copy()
-        d["Cump_Proy"] = (d["Run_Rate"]/d["Proy_Total"].replace(0,np.nan)*100).round(1)
-        d["Est"] = d["Cump_Proy"].apply(
-            lambda c: "🔴 Crítico" if c<u_crit else ("🟡 Alerta" if c<u_alert else "🟢 En Meta")
-        )
-        d["Acumulado"]  = d["Acumulado"].apply(fmt)
-        d["Run_Rate"]   = d["Run_Rate"].apply(fmt)
-        d["Proy_Total"] = d["Proy_Total"].apply(fmt)
-        d["Delta"]      = d["Delta"].apply(fmt)
-        d["Cump_Proy"]  = d["Cump_Proy"].apply(fmt_pct)
-        st.dataframe(d.rename(columns={
-            "Acumulado":"Acum. Mes","Run_Rate":"Proyec. Cierre",
-            "Proy_Total":"Meta","Delta":"Diferencia",
-            "Cump_Proy":"Cumpl. Proy.","Est":"Estado"
-        }), use_container_width=True, hide_index=True)
+with col_hm:
+    sec("🔥", "HEATMAP — CUMPLIMIENTO % SUCURSAL × DÍA")
 
-    sec("📋 Histórico de Cumplimiento")
-    hist = df[["Fecha","Sucursal","V_Proyectada","V_Real","Desviacion","Pct_Cump"]].copy()
-    hist = hist.sort_values(["Fecha","Sucursal"], ascending=[False,True])
-    hist["🚦"] = hist["Pct_Cump"].apply(
-        lambda c: "🔴" if (c or 0)<u_crit else ("🟡" if (c or 0)<u_alert else "🟢")
+    hm = (
+        df.groupby(["SUCURSAL","DIA_SEMANA"])
+        .agg(R=("REAL","sum"), P=("PROYECTADA","sum"))
+        .reset_index()
     )
-    hist["Fecha"]        = hist["Fecha"].dt.strftime("%a %d/%m/%Y")
-    hist["V_Proyectada"] = hist["V_Proyectada"].apply(fmt)
-    hist["V_Real"]       = hist["V_Real"].apply(fmt)
-    hist["Desviacion"]   = hist["Desviacion"].apply(fmt)
-    hist["Pct_Cump"]     = hist["Pct_Cump"].apply(fmt_pct)
-    st.dataframe(hist.rename(columns={
-        "V_Proyectada":"Proyectada","V_Real":"Real",
-        "Desviacion":"Desviación","Pct_Cump":"% Cumpl."
-    }), use_container_width=True, hide_index=True, height=420)
+    hm["C"] = np.where(hm["P"]>0, hm["R"]/hm["P"]*100, np.nan)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# FOOTER
-# ─────────────────────────────────────────────────────────────────────────────
-st.markdown(f"""
-<div class="footer">
-  📊 Dashboard de Ventas &nbsp;|&nbsp;
-  Fuente: Google Sheets (CSV público) &nbsp;|&nbsp;
-  Caché 60 s &nbsp;|&nbsp;
-  {datetime.now().strftime('%d/%m/%Y %H:%M')}
-</div>
-""", unsafe_allow_html=True)
+    suc_list  = suc_agg["SUCURSAL"].tolist()
+    dias_list = [d for d in DIAS_ORD if d in hm["DIA_SEMANA"].values]
+    z_vals, txt_vals = [], []
+    for s in suc_list:
+        rz, rt = [], []
+        for d in dias_list:
+            sub = hm.loc[(hm["SUCURSAL"]==s)&(hm["DIA_SEMANA"]==d), "C"]
+            v   = float(sub.values[0]) if len(sub)>0 and not np.isnan(sub.values[0]) else np.nan
+            rz.append(v)
+            rt.append(f"{s}<br>{d}: {fmt_pct(v)}" if not np.isnan(v) else f"{s}<br>{d}: —")
+        z_vals.append(rz)
+        txt_vals.append(rt)
+
+    fig5 = go.Figure(go.Heatmap(
+        z=z_vals, x=dias_list, y=suc_list,
+        text=txt_vals,
+        hovertemplate="%{text}<extra></extra>",
+        colorscale=[[0,RED],[0.35,YELLOW],[0.65,"#2DD4BF"],[1,CYAN]],
+        zmid=90, zmin=40, zmax=130,
+        showscale=True,
+        colorbar=dict(thickness=10, len=0.8,
+                      tickfont=dict(color=TEXT_DIM,size=9), ticksuffix="%",
+                      bgcolor="rgba(0,0,0,0)"),
+    ))
+    fig5.update_layout(**dark_layout(
+        height=max(260, len(suc_list)*30 + 80),
+        margin=dict(l=10,r=60,t=36,b=10),
+        xaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT,size=10), side="top"),
+        yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT,size=9), autorange="reversed"),
+    ))
+    st.plotly_chart(fig5, use_container_width=True)
+
+divider()
+
+# ════════════════════════════════════════════
+#  SECCIÓN 4 — RUN RATE & GAUGE
+# ════════════════════════════════════════════
+sec("🚀", "RUN RATE & PROYECCIÓN MENSUAL")
+
+rr1, rr2, rr3 = st.columns([1,2,1])
+
+with rr1:
+    fig_g = go.Figure(go.Indicator(
+        mode="gauge+number+delta",
+        value=cump_global if not np.isnan(cump_global) else 0,
+        number=dict(suffix="%", font=dict(size=28, color=CYAN)),
+        delta=dict(reference=100, relative=False, valueformat=".1f", suffix="%",
+                   increasing=dict(color=GREEN), decreasing=dict(color=RED)),
+        gauge=dict(
+            axis=dict(range=[0,130], tickwidth=1, tickcolor=TEXT_DIM,
+                      tickfont=dict(color=TEXT_DIM,size=8)),
+            bar=dict(color=CYAN, thickness=0.22),
+            bgcolor="rgba(0,0,0,0)", borderwidth=0,
+            steps=[
+                dict(range=[0,UMBRAL_CRIT], color="rgba(255,71,87,0.18)"),
+                dict(range=[UMBRAL_CRIT,UMBRAL_ALERT], color="rgba(255,184,0,0.18)"),
+                dict(range=[UMBRAL_ALERT,130], color="rgba(0,245,212,0.12)"),
+            ],
+            threshold=dict(line=dict(color=YELLOW,width=2), thickness=0.75, value=100),
+        ),
+        title=dict(text="Cumplimiento<br>Global", font=dict(size=11,color=TEXT_DIM)),
+    ))
+    fig_g.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color=TEXT), height=230, margin=dict(l=20,r=20,t=40,b=10),
+    )
+    st.plotly_chart(fig_g, use_container_width=True)
+
+with rr2:
+    mes_data = (
+        df.groupby("MES")
+        .agg(REAL=("REAL","sum"), PROYECTADA=("PROYECTADA","sum"))
+        .reset_index().sort_values("MES")
+    )
+    mes_data["C"] = np.where(mes_data["PROYECTADA"]>0,
+                              mes_data["REAL"]/mes_data["PROYECTADA"]*100, np.nan)
+    fig6 = go.Figure()
+    fig6.add_trace(go.Bar(
+        name="Proyectada", x=mes_data["MES"], y=mes_data["PROYECTADA"],
+        marker_color=BG4,
+        hovertemplate="%{x}<br>Meta: Bs %{y:,.0f}<extra></extra>",
+    ))
+    fig6.add_trace(go.Bar(
+        name="Real", x=mes_data["MES"], y=mes_data["REAL"],
+        marker=dict(color=[pct_color(v) for v in mes_data["C"]], opacity=0.85),
+        text=[fmt_pct(v) for v in mes_data["C"]],
+        textposition="outside",
+        textfont=dict(size=10, color=TEXT_DIM),
+        hovertemplate="%{x}<br>Real: Bs %{y:,.0f}<extra></extra>",
+    ))
+    fig6.update_layout(**dark_layout(
+        barmode="overlay", height=230,
+        margin=dict(l=10,r=10,t=36,b=10),
+        xaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT,size=11)),
+        yaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM,size=10), zeroline=False),
+        legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT_DIM,size=10),
+                    orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+    ))
+    st.plotly_chart(fig6, use_container_width=True)
+
+with rr3:
+    proy_pct = (venta_mes / run_rate * 100) if (not np.isnan(run_rate) and run_rate > 0) else np.nan
+    rr_c     = pct_color(proy_pct)
+    st.markdown(f"""<div style="display:flex;flex-direction:column;gap:8px;padding:8px 0;">
+        <div style="background:{BG3};border:1px solid {BORDER};border-left:3px solid {YELLOW};border-radius:8px;padding:12px;">
+            <div style="font-size:9px;color:{TEXT_DIM};letter-spacing:1px;margin-bottom:3px;">RUN RATE MES</div>
+            <div style="font-size:18px;font-weight:800;color:{YELLOW};">{fmt_bs(run_rate)}</div>
+            <div style="font-size:10px;color:{TEXT_DIM};">proyección {dias_mes} días</div>
+        </div>
+        <div style="background:{BG3};border:1px solid {BORDER};border-left:3px solid {CYAN};border-radius:8px;padding:12px;">
+            <div style="font-size:9px;color:{TEXT_DIM};letter-spacing:1px;margin-bottom:3px;">ACUMULADO MES</div>
+            <div style="font-size:18px;font-weight:800;color:{CYAN};">{fmt_bs(venta_mes)}</div>
+            <div style="font-size:10px;color:{TEXT_DIM};">día {dias_trans} de {dias_mes}</div>
+        </div>
+        <div style="background:{BG3};border:1px solid {BORDER};border-left:3px solid {rr_c};border-radius:8px;padding:12px;">
+            <div style="font-size:9px;color:{TEXT_DIM};letter-spacing:1px;margin-bottom:3px;">AVANCE DEL MES</div>
+            <div style="font-size:18px;font-weight:800;color:{rr_c};">{fmt_pct(proy_pct)}</div>
+            <div style="font-size:10px;color:{TEXT_DIM};">vs run rate</div>
+        </div>
+    </div>""", unsafe_allow_html=True)
+
+divider()
+
+# ════════════════════════════════════════════
+#  SECCIÓN 5 — ALERTAS
+# ════════════════════════════════════════════
+sec("🚨", "ALERTAS DE CUMPLIMIENTO")
+
+crit = suc_agg[suc_agg["CUMPLIMIENTO"] < UMBRAL_CRIT].sort_values("CUMPLIMIENTO")
+warn = suc_agg[(suc_agg["CUMPLIMIENTO"] >= UMBRAL_CRIT) & (suc_agg["CUMPLIMIENTO"] < UMBRAL_ALERT)].sort_values("CUMPLIMIENTO")
+ok   = suc_agg[suc_agg["CUMPLIMIENTO"] >= UMBRAL_ALERT].sort_values("CUMPLIMIENTO", ascending=False)
+
+ca, cb, cc = st.columns(3)
+with ca:
+    st.markdown(f'<div style="font-size:10px;color:{RED};letter-spacing:1px;margin-bottom:6px;">⛔ CRÍTICO (&lt;{UMBRAL_CRIT:.0f}%)</div>', unsafe_allow_html=True)
+    if crit.empty:
+        st.markdown(f'<div style="color:{TEXT_DIM};font-size:12px;">Ninguna ✓</div>', unsafe_allow_html=True)
+    for _, r in crit.iterrows():
+        st.markdown(f'<div class="alert-r"><strong>{r["SUCURSAL"]}</strong><br>{fmt_pct(r["CUMPLIMIENTO"])} · {fmt_bs(r["REAL"])}</div>', unsafe_allow_html=True)
+
+with cb:
+    st.markdown(f'<div style="font-size:10px;color:{YELLOW};letter-spacing:1px;margin-bottom:6px;">⚠️ ALERTA ({UMBRAL_CRIT:.0f}–{UMBRAL_ALERT:.0f}%)</div>', unsafe_allow_html=True)
+    if warn.empty:
+        st.markdown(f'<div style="color:{TEXT_DIM};font-size:12px;">Ninguna ✓</div>', unsafe_allow_html=True)
+    for _, r in warn.iterrows():
+        st.markdown(f'<div class="alert-w"><strong>{r["SUCURSAL"]}</strong><br>{fmt_pct(r["CUMPLIMIENTO"])} · {fmt_bs(r["REAL"])}</div>', unsafe_allow_html=True)
+
+with cc:
+    st.markdown(f'<div style="font-size:10px;color:{GREEN};letter-spacing:1px;margin-bottom:6px;">✅ EN META (≥{UMBRAL_ALERT:.0f}%)</div>', unsafe_allow_html=True)
+    if ok.empty:
+        st.markdown(f'<div style="color:{TEXT_DIM};font-size:12px;">Ninguna</div>', unsafe_allow_html=True)
+    for _, r in ok.iterrows():
+        st.markdown(f'<div class="alert-g"><strong>{r["SUCURSAL"]}</strong><br>{fmt_pct(r["CUMPLIMIENTO"])} · {fmt_bs(r["REAL"])}</div>', unsafe_allow_html=True)
+
+divider()
+
+# ════════════════════════════════════════════
+#  SECCIÓN 6 — TABLA DETALLADA
+# ════════════════════════════════════════════
+with st.expander("📋  TABLA DETALLADA — todos los registros", expanded=False):
+    cols_show = [c for c in ["FECHA","SUCURSAL","GRUPO","REAL","PROYECTADA","DESVIACION","CUMPLIMIENTO"]
+                 if c in df.columns]
+    tbl = df[cols_show].sort_values(["FECHA","SUCURSAL"], ascending=[False,True]).copy()
+
+    fmt = {
+        "FECHA":        lambda v: v.strftime("%d/%m/%Y") if pd.notna(v) else "—",
+        "REAL":         lambda v: fmt_bs(v) if not pd.isna(v) else "—",
+        "PROYECTADA":   lambda v: fmt_bs(v) if not pd.isna(v) else "—",
+        "DESVIACION":   lambda v: fmt_bs(v) if not pd.isna(v) else "—",
+        "CUMPLIMIENTO": lambda v: fmt_pct(v) if not pd.isna(v) else "—",
+    }
+    for col, fn in fmt.items():
+        if col in tbl.columns:
+            tbl[col] = tbl[col].map(fn)
+
+    st.dataframe(tbl, use_container_width=True, hide_index=True)
