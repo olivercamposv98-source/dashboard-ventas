@@ -454,7 +454,7 @@ with k2:
 with k3:
     kpi("📈 RUN RATE MES", fmt_bs(run_rate), f"proyección {dias_mes} días", YELLOW)
 with k4:
-    best_suc = suc_agg.iloc[0]["SUCURSAL"] if not suc_agg.empty else "—"
+    best_suc = suc_agg.iloc[0]["SUCURSAL"] if not suc_agg.empty else "-"
     best_val = suc_agg.iloc[0]["REAL"] if not suc_agg.empty else np.nan
     label    = (best_suc[:16]+"…") if len(best_suc) > 16 else best_suc
     kpi("🏆 TOP SUCURSAL", label, fmt_bs(best_val), GREEN)
@@ -1026,19 +1026,11 @@ with st.expander("📋  TABLA DETALLADA — todos los registros", expanded=False
     tbl = df[cols_show].sort_values(["FECHA","SUCURSAL"], ascending=[False,True]).copy()
 
     fmt = {
-        "FECHA":        lambda v: v.strftime("%d/%m/%Y") if pd.notna(v) else "—",
-        "REAL":         lambda v: fmt_bs(v) if not pd.isna(v) else "—",
-        "PROYECTADA":   lambda v: fmt_bs(v) if not pd.isna(v) else "—",
-        "DESVIACION":   lambda v: fmt_bs(v) if not pd.isna(v) else "—",
-        "CUMPLIMIENTO": lambda v: fmt_pct(v) if not pd.isna(v) else "—",
-    }
-    for col, fn in fmt.items():
-        if col in tbl.columns:
-            tbl[col] = tbl[col].map(fn)
-
-    st.dataframe(tbl, use_container_width=True, hide_index=True)
-v: fmt_bs(v) if not pd.isna(v) else "—",
-        "CUMPLIMIENTO": lambda v: fmt_pct(v) if not pd.isna(v) else "—",
+        "FECHA":        lambda v: v.strftime("%d/%m/%Y") if pd.notna(v) else "-",
+        "REAL":         lambda v: fmt_bs(v) if not pd.isna(v) else "-",
+        "PROYECTADA":   lambda v: fmt_bs(v) if not pd.isna(v) else "-",
+        "DESVIACION":   lambda v: fmt_bs(v) if not pd.isna(v) else "-",
+        "CUMPLIMIENTO": lambda v: fmt_pct(v) if not pd.isna(v) else "-",
     }
     for col, fn in fmt.items():
         if col in tbl.columns:
