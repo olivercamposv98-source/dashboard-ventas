@@ -53,6 +53,12 @@ CSV_URL    = (
 SYM          = "Bs"
 UMBRAL_CRIT  = 70.0
 UMBRAL_ALERT = 90.0
+UMBRAL_FC    = 35.0   # Food Cost máximo aceptable %
+
+COMPRAS_URL  = (
+    f"https://docs.google.com/spreadsheets/d/{SHEET_ID}"
+    f"/gviz/tq?tqx=out:csv&sheet=COMPRAS"
+)
 
 # ─────────────────────────────────────────────
 #  CSS GLOBAL
@@ -196,6 +202,34 @@ def load_data() -> pd.DataFrame:
     df["MES"]        = df["FECHA"].dt.to_period("M").astype(str)
     return df
 
+@st.cache_data(ttl=60)
+def load_compras() -> pd.DataFrame:
+    try:
+        df = pd.read_csv(COMPRAS_URL, header=0)
+    except Exception:
+        return pd.DataFrame()
+    df.columns = [c.strip().upper() for c in df.columns]
+    col_map = {}
+    for c in df.columns:
+        cu = c.upper()
+        if   "FECHA"   in cu: col_map[c] = "FECHA"
+        elif "MARCA"   in cu: col_map[c] = "MARCA"
+        elif "PROVEE"  in cu: col_map[c] = "PROVEEDOR"
+        elif "PRODUC"  in cu: col_map[c] = "PRODUCTO"
+        elif "MONTO"   in cu: col_map[c] = "MONTO_COMPRA"
+    df = df.rename(columns=col_map)
+    if "MONTO_COMPRA" in df.columns:
+        df["MONTO_COMPRA"] = df["MONTO_COMPRA"].apply(parse_bs)
+    if "FECHA" in df.columns:
+        df["FECHA"] = pd.to_datetime(df["FECHA"], dayfirst=True, errors="coerce")
+    df = df.dropna(subset=["FECHA", "MONTO_COMPRA"])
+    df = df.sort_values("FECHA")
+    if "MARCA" in df.columns:
+        df["MARCA"] = df["MARCA"].str.strip().str.upper()
+    df["MES"]        = df["FECHA"].dt.to_period("M").astype(str)
+    df["SEMANA_ISO"] = df["FECHA"].dt.isocalendar().week.astype(int)
+    return df
+
 # ─────────────────────────────────────────────
 #  HELPERS
 # ─────────────────────────────────────────────
@@ -307,6 +341,21 @@ if df.empty:
     st.stop()
 
 # ─────────────────────────────────────────────
+#  CARGA Y FILTRO DE COMPRAS
+# ─────────────────────────────────────────────
+cp_all = load_compras()
+if not cp_all.empty:
+    cp_mask = (
+        (cp_all["FECHA"].dt.date >= f_ini) &
+        (cp_all["FECHA"].dt.date <= f_fin)
+    )
+    if grupos_sel and "MARCA" in cp_all.columns:
+        cp_mask &= cp_all["MARCA"].isin([g.upper() for g in grupos_sel])
+    cp = cp_all[cp_mask].copy()
+else:
+    cp = pd.DataFrame()
+
+# ─────────────────────────────────────────────
 #  MÉTRICAS
 # ─────────────────────────────────────────────
 total_real = df["REAL"].sum()
@@ -338,6 +387,45 @@ suc_agg["CUMPLIMIENTO"] = np.where(
 )
 suc_agg = suc_agg.sort_values("REAL", ascending=False)
 
+# Food Cost
+total_compras = cp["MONTO_COMPRA"].sum() if not cp.empty else np.nan
+fc_global = (total_compras / total_real * 100) if (not cp.empty and total_real > 0) else np.nan
+
+# FC por marca
+if not cp.empty and "MARCA" in cp.columns:
+    cp_marca = cp.groupby("MARCA")["MONTO_COMPRA"].sum().reset_index()
+    vt_marca  = df.copy()
+    vt_marca["GRUPO"] = vt_marca["GRUPO"].str.upper()
+    vt_marca  = vt_marca.groupby("GRUPO")["REAL"].sum().reset_index().rename(
+        columns={"GRUPO":"MARCA","REAL":"VENTAS"})
+    fc_marca  = cp_marca.merge(vt_marca, on="MARCA", how="outer").fillna(0)
+    fc_marca["FC_PCT"] = np.where(
+        fc_marca["VENTAS"] > 0,
+        fc_marca["MONTO_COMPRA"] / fc_marca["VENTAS"] * 100,
+        np.nan
+    )
+    # FC mensual para tendencia
+    cp_mes = cp.groupby(["MES","MARCA"])["MONTO_COMPRA"].sum().reset_index()
+    vt_mes_tmp = df.copy()
+    vt_mes_tmp["GRUPO"] = vt_mes_tmp["GRUPO"].str.upper()
+    vt_mes  = vt_mes_tmp.groupby(["MES","GRUPO"])["REAL"].sum().reset_index().rename(
+        columns={"GRUPO":"MARCA","REAL":"VENTAS"})
+    fc_mes  = cp_mes.merge(vt_mes, on=["MES","MARCA"], how="outer").fillna(0)
+    fc_mes["FC_PCT"] = np.where(
+        fc_mes["VENTAS"] > 0,
+        fc_mes["MONTO_COMPRA"] / fc_mes["VENTAS"] * 100,
+        np.nan
+    )
+    # FC por proveedor
+    if "PROVEEDOR" in cp.columns:
+        cp_prov = cp.groupby("PROVEEDOR")["MONTO_COMPRA"].sum().reset_index().sort_values("MONTO_COMPRA", ascending=False)
+    else:
+        cp_prov = pd.DataFrame()
+else:
+    fc_marca  = pd.DataFrame()
+    fc_mes    = pd.DataFrame()
+    cp_prov   = pd.DataFrame()
+
 # ════════════════════════════════════════════
 #  HEADER
 # ════════════════════════════════════════════
@@ -358,7 +446,7 @@ with ch2:
 # ════════════════════════════════════════════
 #  KPI ROW
 # ════════════════════════════════════════════
-k1,k2,k3,k4,k5 = st.columns(5)
+k1,k2,k3,k4,k5,k6 = st.columns(6)
 with k1:
     kpi("⚡ VENTA REAL TOTAL", fmt_bs(total_real), f"{dias_total} días analizados", CYAN)
 with k2:
@@ -374,6 +462,12 @@ with k5:
     pct_dias = (dias_sobre / dias_total * 100) if dias_total > 0 else 0
     kpi("✅ DÍAS SOBRE META", f"{dias_sobre}/{dias_total}", f"{pct_dias:.0f}% del período",
         GREEN if pct_dias >= 50 else YELLOW)
+with k6:
+    fc_accent = (RED if (not np.isnan(fc_global) and fc_global > UMBRAL_FC)
+                 else (YELLOW if (not np.isnan(fc_global) and fc_global > UMBRAL_FC * 0.8)
+                       else GREEN))
+    fc_sub    = f"meta ≤{UMBRAL_FC:.0f}%" if not np.isnan(fc_global) else "sin datos compras"
+    kpi("🍽 FOOD COST", fmt_pct(fc_global), fc_sub, fc_accent)
 
 divider()
 
@@ -736,7 +830,162 @@ with rr3:
 divider()
 
 # ════════════════════════════════════════════
-#  SECCIÓN 5 — ALERTAS
+#  SECCIÓN 5 — FOOD COST TEÓRICO
+# ════════════════════════════════════════════
+sec("🍽", "FOOD COST TEÓRICO — COMPRAS VS VENTAS")
+
+if cp.empty:
+    st.info("Sin datos de compras para el período seleccionado. Verifica que la hoja **COMPRAS** tenga datos y esté pública.")
+else:
+    fc_col1, fc_col2, fc_col3 = st.columns([1, 1, 1])
+
+    # ── Gauge FC Global ────────────────────────
+    with fc_col1:
+        fc_val = fc_global if not np.isnan(fc_global) else 0
+        fig_fc_g = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=fc_val,
+            number=dict(suffix="%", font=dict(size=28, color=RED if fc_val > UMBRAL_FC else GREEN)),
+            delta=dict(reference=UMBRAL_FC, relative=False, valueformat=".1f", suffix="%",
+                       increasing=dict(color=RED), decreasing=dict(color=GREEN)),
+            gauge=dict(
+                axis=dict(range=[0, 60], tickwidth=1, tickcolor=TEXT_DIM,
+                          tickfont=dict(color=TEXT_DIM, size=8)),
+                bar=dict(color=RED if fc_val > UMBRAL_FC else GREEN, thickness=0.22),
+                bgcolor="rgba(0,0,0,0)", borderwidth=0,
+                steps=[
+                    dict(range=[0, UMBRAL_FC * 0.8], color="rgba(6,214,160,0.15)"),
+                    dict(range=[UMBRAL_FC * 0.8, UMBRAL_FC], color="rgba(255,184,0,0.18)"),
+                    dict(range=[UMBRAL_FC, 60], color="rgba(255,71,87,0.18)"),
+                ],
+                threshold=dict(line=dict(color=YELLOW, width=2), thickness=0.75, value=UMBRAL_FC),
+            ),
+            title=dict(text=f"Food Cost Global<br><span style='font-size:11px'>meta ≤{UMBRAL_FC:.0f}%</span>",
+                       font=dict(size=11, color=TEXT_DIM)),
+        ))
+        fig_fc_g.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=TEXT), height=230, margin=dict(l=20, r=20, t=40, b=10),
+        )
+        st.plotly_chart(fig_fc_g, use_container_width=True)
+
+        # Resumen Ventas vs Compras
+        fc_resumen_color = RED if fc_val > UMBRAL_FC else GREEN
+        st.markdown(f"""<div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+            <div style="background:{BG3};border:1px solid {BORDER};border-left:3px solid {CYAN};
+                        border-radius:7px;padding:10px 12px;display:flex;justify-content:space-between;">
+                <span style="font-size:10px;color:{TEXT_DIM};">VENTAS PERÍODO</span>
+                <span style="font-size:13px;font-weight:700;color:{CYAN};">{fmt_bs(total_real)}</span>
+            </div>
+            <div style="background:{BG3};border:1px solid {BORDER};border-left:3px solid {YELLOW};
+                        border-radius:7px;padding:10px 12px;display:flex;justify-content:space-between;">
+                <span style="font-size:10px;color:{TEXT_DIM};">COMPRAS PERÍODO</span>
+                <span style="font-size:13px;font-weight:700;color:{YELLOW};">{fmt_bs(total_compras)}</span>
+            </div>
+            <div style="background:{BG3};border:1px solid {BORDER};border-left:3px solid {fc_resumen_color};
+                        border-radius:7px;padding:10px 12px;display:flex;justify-content:space-between;">
+                <span style="font-size:10px;color:{TEXT_DIM};">FOOD COST %</span>
+                <span style="font-size:13px;font-weight:700;color:{fc_resumen_color};">{fmt_pct(fc_global)}</span>
+            </div>
+        </div>""", unsafe_allow_html=True)
+
+    # ── FC por Marca (barras) ──────────────────
+    with fc_col2:
+        if not fc_marca.empty and not fc_marca["FC_PCT"].isna().all():
+            fig_fc_m = go.Figure()
+            fc_colors = [RED if v > UMBRAL_FC else (YELLOW if v > UMBRAL_FC * 0.85 else GREEN)
+                         for v in fc_marca["FC_PCT"].fillna(0)]
+            fig_fc_m.add_trace(go.Bar(
+                y=fc_marca["MARCA"],
+                x=fc_marca["FC_PCT"].fillna(0),
+                orientation="h",
+                marker=dict(color=fc_colors, opacity=0.85),
+                text=[f"{fmt_pct(v)}  (Compras: {fmt_bs(c)})"
+                      for v, c in zip(fc_marca["FC_PCT"], fc_marca["MONTO_COMPRA"])],
+                textposition="outside",
+                textfont=dict(size=10, color=TEXT_DIM),
+                hovertemplate="<b>%{y}</b><br>FC: %{x:.1f}%<extra></extra>",
+            ))
+            # Línea de meta
+            fig_fc_m.add_vline(
+                x=UMBRAL_FC, line_dash="dot", line_color=YELLOW, line_width=1.5,
+                annotation_text=f"Meta {UMBRAL_FC:.0f}%",
+                annotation_font_color=YELLOW, annotation_font_size=10,
+            )
+            fig_fc_m.update_layout(**dark_layout(
+                height=260,
+                margin=dict(l=10, r=140, t=36, b=10),
+                title=dict(text="Food Cost % por Marca", font=dict(size=11, color=TEXT_DIM), x=0),
+                xaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM, size=10),
+                           ticksuffix="%", range=[0, max(fc_marca["FC_PCT"].fillna(0).max() * 1.3, UMBRAL_FC * 1.5)]),
+                yaxis=dict(gridcolor="rgba(0,0,0,0)", tickfont=dict(color=TEXT, size=11), autorange="reversed"),
+                showlegend=False,
+            ))
+            st.plotly_chart(fig_fc_m, use_container_width=True)
+
+            # Tabla marca
+            st.markdown(f'<div style="font-size:10px;color:{TEXT_DIM};letter-spacing:1px;margin-bottom:6px;">DETALLE POR MARCA</div>', unsafe_allow_html=True)
+            for _, r in fc_marca.sort_values("FC_PCT", ascending=False).iterrows():
+                fc_c = RED if r["FC_PCT"] > UMBRAL_FC else (YELLOW if r["FC_PCT"] > UMBRAL_FC * 0.85 else GREEN)
+                st.markdown(f"""<div style="display:flex;justify-content:space-between;align-items:center;
+                    padding:5px 8px;background:{BG3};border-radius:5px;margin-bottom:3px;">
+                    <span style="color:{TEXT};font-size:11px;font-weight:600;">{r['MARCA']}</span>
+                    <span style="color:{TEXT_DIM};font-size:11px;">Compras: {fmt_bs(r['MONTO_COMPRA'])}</span>
+                    <span style="color:{TEXT_DIM};font-size:11px;">Ventas: {fmt_bs(r['VENTAS'])}</span>
+                    <span style="color:{fc_c};font-size:12px;font-weight:700;">{fmt_pct(r['FC_PCT'])}</span>
+                </div>""", unsafe_allow_html=True)
+        else:
+            st.info("No hay datos suficientes para calcular FC por marca.")
+
+    # ── Tendencia FC mensual + Top proveedores ──
+    with fc_col3:
+        if not fc_mes.empty and not fc_mes["FC_PCT"].isna().all():
+            fig_fc_t = go.Figure()
+            for marca in fc_mes["MARCA"].unique():
+                sub = fc_mes[fc_mes["MARCA"] == marca].sort_values("MES")
+                fig_fc_t.add_trace(go.Scatter(
+                    x=sub["MES"], y=sub["FC_PCT"],
+                    name=marca, mode="lines+markers",
+                    line=dict(width=2),
+                    marker=dict(size=6),
+                    hovertemplate=f"<b>{marca}</b><br>%{{x}}: %{{y:.1f}}%<extra></extra>",
+                ))
+            fig_fc_t.add_hline(
+                y=UMBRAL_FC, line_dash="dot", line_color=YELLOW, line_width=1.5,
+                annotation_text=f"Meta {UMBRAL_FC:.0f}%",
+                annotation_font_color=YELLOW, annotation_font_size=10,
+            )
+            fig_fc_t.update_layout(**dark_layout(
+                height=200,
+                margin=dict(l=10, r=10, t=36, b=10),
+                title=dict(text="Tendencia FC % mensual", font=dict(size=11, color=TEXT_DIM), x=0),
+                xaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM, size=10)),
+                yaxis=dict(gridcolor=BG4, tickfont=dict(color=TEXT_DIM, size=10),
+                           zeroline=False, ticksuffix="%"),
+                legend=dict(bgcolor="rgba(0,0,0,0)", font=dict(color=TEXT_DIM, size=9),
+                            orientation="h", yanchor="bottom", y=1.0, xanchor="right", x=1),
+            ))
+            st.plotly_chart(fig_fc_t, use_container_width=True)
+
+        if not cp_prov.empty:
+            st.markdown(f'<div style="font-size:10px;color:{TEXT_DIM};letter-spacing:1px;margin:8px 0 6px 0;">TOP PROVEEDORES POR COMPRA</div>', unsafe_allow_html=True)
+            max_prov = cp_prov["MONTO_COMPRA"].max()
+            for _, r in cp_prov.head(6).iterrows():
+                bar_pct = int(r["MONTO_COMPRA"] / max_prov * 100) if max_prov > 0 else 0
+                st.markdown(f"""<div style="margin-bottom:6px;">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:2px;">
+                        <span style="font-size:11px;color:{TEXT};">{r['PROVEEDOR']}</span>
+                        <span style="font-size:11px;font-weight:700;color:{YELLOW};">{fmt_bs(r['MONTO_COMPRA'])}</span>
+                    </div>
+                    <div style="background:{BG4};border-radius:3px;height:5px;">
+                        <div style="background:{YELLOW};width:{bar_pct}%;height:100%;border-radius:3px;opacity:0.8;"></div>
+                    </div>
+                </div>""", unsafe_allow_html=True)
+
+divider()
+
+# ════════════════════════════════════════════
+#  SECCIÓN 6 — ALERTAS DE CUMPLIMIENTO
 # ════════════════════════════════════════════
 sec("🚨", "ALERTAS DE CUMPLIMIENTO")
 
@@ -781,6 +1030,14 @@ with st.expander("📋  TABLA DETALLADA — todos los registros", expanded=False
         "REAL":         lambda v: fmt_bs(v) if not pd.isna(v) else "—",
         "PROYECTADA":   lambda v: fmt_bs(v) if not pd.isna(v) else "—",
         "DESVIACION":   lambda v: fmt_bs(v) if not pd.isna(v) else "—",
+        "CUMPLIMIENTO": lambda v: fmt_pct(v) if not pd.isna(v) else "—",
+    }
+    for col, fn in fmt.items():
+        if col in tbl.columns:
+            tbl[col] = tbl[col].map(fn)
+
+    st.dataframe(tbl, use_container_width=True, hide_index=True)
+v: fmt_bs(v) if not pd.isna(v) else "—",
         "CUMPLIMIENTO": lambda v: fmt_pct(v) if not pd.isna(v) else "—",
     }
     for col, fn in fmt.items():
